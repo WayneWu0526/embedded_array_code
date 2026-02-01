@@ -1,0 +1,6 @@
+Header header
+geometry_msgs/Pose diana7_tool_pose
+geometry_msgs/Pose arm1_tool_pose
+geometry_msgs/Pose arm2_tool_pose
+geometry_msgs/Vector3[12] hall_data
+string current_target_id

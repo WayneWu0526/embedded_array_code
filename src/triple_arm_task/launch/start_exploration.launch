@@ -1,0 +1,51 @@
+<launch>
+  <!-- Arguments for tools -->
+  <!-- 1. magnetometer_array, 2. electronic_magnet -->
+  <!-- 1. calibrated_em, 2. calibrated_magmeterarray -->
+  <arg name="diana7_tool" default="calibrated_magmeterarray"/> 
+  <!-- Tools options -->
+  <arg name="arm1_tool" default="calibrated_em"/>
+  <arg name="arm2_tool" default="calibrated_em"/>
+
+  <arg name="use_rviz" default="true"/>
+  <arg name="load_environment" default="true"/>
+
+  <!-- Start the serial processor node for hall data -->
+  <node name="serial_node" pkg="serial_processor" type="serial_node.py" output="screen"/>
+
+  <!-- Include the triple_arm_bringup launch file -->
+  <include file="$(find zlab_robots_bringup)/launch/triple_arm/triple_arm_bringup.launch">
+    <arg name="diana7_tool" value="$(arg diana7_tool)"/>
+    <arg name="arm1_tool" value="$(arg arm1_tool)"/>
+    <arg name="arm2_tool" value="$(arg arm2_tool)"/>
+    <arg name="use_rviz" value="$(arg use_rviz)"/>
+  </include>
+
+  <!-- Load Scanning Environment -->
+  <include if="$(arg load_environment)" file="$(find zlab_environment)/launch/load_environment.launch">
+    <arg name="environment_config" value="$(find zlab_environment)/config/scanning_table.yaml"/>
+    <arg name="load_environment" value="true"/>
+    <arg name="node_name" value="environment_loader_scanning"/>
+  </include>
+
+  <!-- Path Generation -->
+  <arg name="path_type" default="mesh" doc="Options: cubic, screw, infinite, mesh"/>
+  <node name="path_generator" pkg="triple_arm_task" type="generate_paths.py" output="screen" args="--type $(arg path_type)"/>
+
+  <arg name="path_file" default="$(find triple_arm_task)/config/paths/current_path.csv"/>
+  <arg name="loop_path" default="false"/>
+  <arg name="connect_wait_time" default="5.0"/>
+  <arg name="manual_confirm" default="false"/>
+  <arg name="speed_scaling" default="0.03"/>
+  <arg name="num_samples" default="10"/>
+
+  <node name="triple_arm_scanner" pkg="triple_arm_task" type="scan_controller.py" output="screen">
+    <rosparam command="load" file="$(find triple_arm_task)/config/start_positions.yaml"/>
+    <param name="path_file" value="$(arg path_file)"/>
+    <param name="loop_path" value="$(arg loop_path)"/>
+    <param name="connect_wait_time" value="$(arg connect_wait_time)"/>
+    <param name="manual_confirm" value="$(arg manual_confirm)"/>
+    <param name="speed_scaling" value="$(arg speed_scaling)"/>
+    <param name="num_samples" value="$(arg num_samples)"/>
+  </node>
+</launch>

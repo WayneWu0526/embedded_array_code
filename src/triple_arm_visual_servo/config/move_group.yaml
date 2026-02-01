@@ -1,0 +1,22 @@
+arms:
+  - name: diana7
+    move_group: diana7
+    ee_link: diana7_ee_link
+    base_link: diana7_pedestal_link
+    flange_calib: diana7_flange_calib_rect
+  - name: arm1
+    move_group: arm1
+    ee_link: arm1_ee_link
+    base_link: arm1_pedestal_link
+    flange_calib: arm1_flange_calib_rect
+  - name: arm2
+    move_group: arm2
+    ee_link: arm2_ee_link
+    base_link: arm2_pedestal_link
+    flange_calib: arm2_flange_calib_rect
+
+axes:
+  - world_frame:
+    name: "world"
+  - camera_frame:
+    name: "lab_table" 

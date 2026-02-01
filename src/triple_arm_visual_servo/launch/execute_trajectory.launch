@@ -1,0 +1,19 @@
+<launch>
+    <!-- 1. Start the main visual servo node (includes TagSLAM, arm bringup, and viewers) -->
+    <include file="$(find triple_arm_visual_servo)/launch/visual_servo.launch">
+        <arg name="speed_scaling" value="0.05"/>
+        <arg name="acc_scaling" value="0.05"/>
+    </include>
+
+    <!-- 2. Start the execute trajectory node -->
+    <!-- Parameters for the executor:
+         trajectory_file: Path to the JSON trajectory
+         relative_scale: Multiplier for the displacement (0.5 means half the distance stored in JSON)
+         ee_link: End effector link to use as the start position base
+    -->
+    <node name="execute_trajectory_node" pkg="triple_arm_visual_servo" type="execute_trajectory.py" output="screen">
+        <param name="trajectory_file" value="$(find triple_arm_visual_servo)/config/trajectories/ring_12.json"/>
+        <param name="relative_scale" value="1"/>
+        <param name="ee_link" value="diana7_ee_link"/>
+    </node>
+</launch>

@@ -1,0 +1,50 @@
+<launch>
+  <!-- <env name="ROSCONSOLE_CONFIG_FILE" value="rosconsole.config"/>  -->
+  <!-- <include file="$(find zlab_robots_calibration)/launch/localization_tagslam.launch"/> -->
+  <!-- Arguments for tools -->
+  <arg name="diana7_tool" default="magnetometer_array"/> 
+  <!-- Tools options -->
+  <!-- 1. magnetometer_array, 2. calibrated_magmeter_array -->
+  <arg name="arm1_tool" default="electronic_magnet"/>
+  <!-- 1. electronic_magnet, 2. calibrated_em -->
+  <arg name="arm2_tool" default="electronic_magnet"/>
+  <!-- 1. electronic_magnet, 2. calibrated_em -->
+  <arg name="use_rviz" default="true"/>
+  <!-- <arg name="load_environment" default="true"/> -->
+
+
+  <!-- Include the triple_arm_bringup launch file -->
+  <include file="$(find zlab_robots_bringup)/launch/triple_arm/triple_arm_bringup.launch">
+    <arg name="diana7_tool" value="$(arg diana7_tool)"/>
+    <arg name="arm1_tool" value="$(arg arm1_tool)"/>
+    <arg name="arm2_tool" value="$(arg arm2_tool)"/>
+    <arg name="use_rviz" value="$(arg use_rviz)"/>
+  </include>
+
+  <!-- Static transform for diana7_flange_calib orientation correction: Rotate -90 deg (CW) around Z -->
+  <!-- <node pkg="tf2_ros" type="static_transform_publisher" name="diana7_flange_rect_publisher" 
+        args="0 0 0 -1.57079632679 0 0 diana7_flange_calib diana7_flange_calib_rect" />
+  <node pkg="tf2_ros" type="static_transform_publisher" name="arm1_flange_rect_publisher" 
+        args="0 0 0 -1.57079632679 0 0 arm1_flange_calib arm1_flange_calib_rect" />
+  <node pkg="tf2_ros" type="static_transform_publisher" name="arm2_flange_rect_publisher" 
+        args="0 0 0 -1.57079632679 0 0 arm2_flange_calib arm2_flange_calib_rect" /> -->
+
+  <!-- Visual Servo Control Node -->
+  <arg name="config_file" default="$(find triple_arm_visual_servo)/config/move_group.yaml"/>
+  <arg name="speed_scaling" default="0.1"/>
+  <arg name="acc_scaling" default="0.1"/>
+
+  <node name="visual_servo_node" pkg="triple_arm_visual_servo" type="visual_servo_node.py" output="screen">
+      <param name="config_path" value="$(arg config_file)"/>
+      <param name="speed_scaling" value="$(arg speed_scaling)"/>
+      <param name="acc_scaling" value="$(arg acc_scaling)"/>
+  </node>
+
+  <!-- Image Viewer for detection display -->
+  <node name="disp_viewer" pkg="image_view" type="image_view" respawn="false" output="screen">
+      <remap from="image" to="/detector/disp" />
+      <!-- 将 autosize 设为 false，然后手动调整图像缩放 -->
+      <param name="autosize" value="true" />
+  </node>
+
+</launch>

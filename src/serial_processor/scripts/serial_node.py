@@ -12,7 +12,7 @@ class SerialNode:
         
         # 获取参数
         self.port = rospy.get_param('~port', '/dev/ttyACM0')
-        self.baudrate = rospy.get_param('~baudrate', 115200)
+        self.baudrate = rospy.get_param('~baudrate', 921600)
         
         # 转换系数: 32768 -> 32Gs => 1 LSB = 32/32768 Gs
         self.scale = 32.0 / 32768.0

@@ -1,0 +1,11 @@
+<launch>
+    <!-- 1. Start the main visual servo node (includes TagSLAM and arm bringup) -->
+    <include file="$(find triple_arm_visual_servo)/launch/visual_servo.launch">
+        <arg name="speed_scaling" value="0.05"/>
+        <arg name="acc_scaling" value="0.05"/>
+    </include>
+
+    <!-- 2. Start the example move node -->
+    <!-- It will wait internally for the 'lab_table' frame to be published (calibration completion) -->
+    <node name="example_move_node" pkg="triple_arm_visual_servo" type="example_move.py" output="screen" />
+</launch>
