@@ -12,6 +12,9 @@ from serial_processor.srv import GetHallData
 from triple_arm_task.msg import ScanData
 from std_msgs.msg import Header
 from trajectory_loader import TrajectoryLoader
+from moveit_msgs.srv import GetPositionIK, GetPositionIKRequest
+from moveit_msgs.msg import PositionIKRequest, RobotState
+from sensor_msgs.msg import JointState
 
 class TripleArmScanner:
     def __init__(self):
@@ -30,6 +33,7 @@ class TripleArmScanner:
         self.speed_scaling = rospy.get_param('~speed_scaling', 0.01)
         # self.relative_scale = rospy.get_param('~relative_scale', 1.0)
         self.num_samples = rospy.get_param('~num_samples', 10)
+        self.optimize_frequency = rospy.get_param('~optimize_frequency', 10)
         
         # JSON Logging Setup
         self.data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
@@ -84,6 +88,10 @@ class TripleArmScanner:
         rospy.wait_for_service('get_hall_data')
         self.get_hall_data_srv = rospy.ServiceProxy('get_hall_data', GetHallData)
 
+        rospy.loginfo("Waiting for /compute_ik service...")
+        rospy.wait_for_service('/compute_ik')
+        self.ik_srv = rospy.ServiceProxy('/compute_ik', GetPositionIK)
+
         # Publisher
         self.data_pub = rospy.Publisher('scan_data', ScanData, queue_size=10)
 
@@ -97,6 +105,56 @@ class TripleArmScanner:
                 json.dump(self.scan_results, f, indent=4)
         except Exception as e:
             rospy.logerr(f"Failed to save JSON: {e}")
+
+    def optimize_null_space(self):
+        """
+        尝试寻找一个保持当前末端位姿不变，但关节尽量靠近 0 位的构型（依赖 TRAC-IK Distance 模式）
+        """
+        rospy.loginfo("Performing null-space optimization for diana7...")
+        
+        # 获取当前位姿
+        current_pose = self.diana7_group.get_current_pose()
+        joint_names = self.diana7_group.get_active_joints()
+        
+        # 构造 IK 请求
+        req = GetPositionIKRequest()
+        req.ik_request.group_name = "diana7"
+        req.ik_request.pose_stamped = current_pose
+        req.ik_request.avoid_collisions = True
+        
+        # 设置 Seed State 为全 0，TRAC-IK 的 Distance 模式会寻找最靠近 Seed 的解
+        seed_state = RobotState()
+        seed_state.joint_state.name = joint_names
+        seed_state.joint_state.position = [0.0] * len(joint_names)
+        req.ik_request.robot_state = seed_state
+        
+        try:
+            resp = self.ik_srv(req)
+            if resp.error_code.val == resp.error_code.SUCCESS:
+                # 提取 diana7 的关节值
+                optimized_joints = []
+                for name in joint_names:
+                    if name in resp.solution.joint_state.name:
+                        idx = resp.solution.joint_state.name.index(name)
+                        optimized_joints.append(resp.solution.joint_state.position[idx])
+                
+                if len(optimized_joints) == len(joint_names):
+                    rospy.loginfo("Optimized configuration found. Executing joint-space move...")
+                    # 应用速度缩放
+                    self.diana7_group.set_max_velocity_scaling_factor(self.speed_scaling)
+                    self.diana7_group.set_joint_value_target(optimized_joints)
+                    success = self.diana7_group.go(wait=True)
+                    self.diana7_group.stop()
+                    return success
+                else:
+                    rospy.logwarn("Could not find all joint values in IK solution.")
+                    return False
+            else:
+                rospy.logwarn(f"Null-space optimization IK failed (Error code: {resp.error_code.val}). Keeping current config.")
+                return False
+        except Exception as e:
+            rospy.logerr(f"Exception in optimize_null_space: {e}")
+            return False
 
     def go_to_start(self):
         rospy.loginfo("Moving to start positions...")
@@ -145,6 +203,9 @@ class TripleArmScanner:
         if 'diana7' in self.start_positions:
             rospy.loginfo("Moving diana7 to start pose...")
             move_to_pose(self.diana7_group, self.start_positions['diana7'])
+            # 这里的起始点虽然通常是手动设定的，但到达后执行一次零空间优化可以确保
+            # TRAC-IK 找到此位姿下最接近 0 位的构型，为后续扫描腾出关节空间。
+            self.optimize_null_space()
             
         rospy.loginfo("Reached start positions.")
 
@@ -181,7 +242,7 @@ class TripleArmScanner:
     def execute_scan(self):
         self.go_to_start()
         
-        return
+        # return
         points = self.load_path()
         rospy.loginfo(f"Loaded {len(points)} points from path.")
         
@@ -195,34 +256,46 @@ class TripleArmScanner:
                 if rospy.is_shutdown():
                     break
                 
+                # 每 K 个点进行一次零空间优化，重置关节构型以避免关节限位
+                if i > 0 and i % self.optimize_frequency == 0:
+                    rospy.loginfo(f"Triggering periodic null-space optimization at point {i}...")
+                    self.optimize_null_space()
+
                 progress = (i + 1) / total_points * 100
                 remaining = total_points - (i + 1)
                 rospy.loginfo(f"--- Progress: {i+1}/{total_points} ({progress:.1f}%) | Remaining: {remaining} ---")
                 rospy.loginfo(f"Moving to point {i+1}...")
                 
                 # ---------------------------------------------------------
-                # 方案 A: 纯笛卡尔路径规划 (Pure Cartesian Path)
-                # 强制末端走直线，并禁用 PTP 回退逻辑，确保不会出现构型跳变。
+                # 使用零空间偏置 IK (Null-space Biased IK)
                 # ---------------------------------------------------------
-                waypoints = [target_pose]
-                # eef_step=0.01: 1cm 步长插值
-                # avoid_collisions=True: 开启碰撞检测
-                (plan, fraction) = self.diana7_group.compute_cartesian_path(
-                                    waypoints,   
-                                    0.01,        
-                                    True)        
-
+                joint_names = self.diana7_group.get_active_joints()
+                req = GetPositionIKRequest()
+                req.ik_request.group_name = "diana7"
+                req.ik_request.pose_stamped.header.frame_id = "world"
+                req.ik_request.pose_stamped.pose = target_pose
+                req.ik_request.avoid_collisions = True
+                
+                # 设置 Seed 为全 0，诱导 TRAC-IK 寻找最舒展的构型
+                seed_state = RobotState()
+                seed_state.joint_state.name = joint_names
+                seed_state.joint_state.position = [0.0] * len(joint_names)
+                req.ik_request.robot_state = seed_state
+                
                 plan_success = False
-                if fraction == 1.0:
-                    rospy.loginfo("Cartesian path computed successfully (100%).")
-                    # 显式重新计算轨迹时间，以应用速度和加速度缩放
-                    plan = self.diana7_group.retime_trajectory(self.robot.get_current_state(), plan, 
-                                                               velocity_scaling_factor=self.speed_scaling,
-                                                               acceleration_scaling_factor=self.speed_scaling)
-                    plan_success = True
-                else:
-                    rospy.logerr(f"Cartesian path incomplete (fraction={fraction:.2f}). Skipping this point to ensure safety.")
-                    plan_success = False
+                try:
+                    resp = self.ik_srv(req)
+                    if resp.error_code.val == resp.error_code.SUCCESS:
+                        # 提取关节解并过滤（应对 19 关节返回问题）
+                        joint_dictionary = dict(zip(resp.solution.joint_state.name, resp.solution.joint_state.position))
+                        joint_goal = [joint_dictionary[name] for name in joint_names]
+                        
+                        self.diana7_group.set_joint_value_target(joint_goal)
+                        plan_success = True
+                    else:
+                        rospy.logerr(f"IK failed for point {i} (Error: {resp.error_code.val})")
+                except Exception as e:
+                    rospy.logerr(f"IK service error: {e}")
 
                 if self.manual_confirm:
                     if plan_success:
@@ -240,14 +313,14 @@ class TripleArmScanner:
                             continue
                         
                         # Execute the plan
-                        success = self.diana7_group.execute(plan, wait=True)
+                        success = self.diana7_group.go(wait=True)
                     else:
                         rospy.logwarn("Planning failed! Cannot execute.")
                         success = False
                 else:
                     # Automatic mode
                     if plan_success:
-                        success = self.diana7_group.execute(plan, wait=True)
+                        success = self.diana7_group.go(wait=True)
                     else:
                         success = False
 

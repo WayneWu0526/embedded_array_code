@@ -8,7 +8,7 @@
   <arg name="arm2_tool" default="calibrated_em"/>
 
   <arg name="use_rviz" default="true"/>
-  <arg name="load_environment" default="true"/>
+  <arg name="load_environment" default="false"/>
 
   <!-- Start the serial processor node for hall data -->
   <node name="serial_node" pkg="serial_processor" type="serial_node.py" output="screen"/>
@@ -29,15 +29,16 @@
   </include>
 
   <!-- Path Generation -->
-  <arg name="path_type" default="mesh" doc="Options: cubic, screw, infinite, mesh"/>
+  <arg name="path_type" default="cone" doc="Options: cubic, screw, infinite, mesh, cone, path1, path2, path3"/>
   <node name="path_generator" pkg="triple_arm_task" type="generate_paths.py" output="screen" args="--type $(arg path_type)"/>
 
   <arg name="path_file" default="$(find triple_arm_task)/config/paths/current_path.csv"/>
   <arg name="loop_path" default="false"/>
   <arg name="connect_wait_time" default="5.0"/>
-  <arg name="manual_confirm" default="false"/>
+  <arg name="manual_confirm" default="true"/>
   <arg name="speed_scaling" default="0.03"/>
   <arg name="num_samples" default="10"/>
+  <arg name="optimize_frequency" default="10"/>
 
   <node name="triple_arm_scanner" pkg="triple_arm_task" type="scan_controller.py" output="screen">
     <rosparam command="load" file="$(find triple_arm_task)/config/start_positions.yaml"/>
@@ -47,5 +48,6 @@
     <param name="manual_confirm" value="$(arg manual_confirm)"/>
     <param name="speed_scaling" value="$(arg speed_scaling)"/>
     <param name="num_samples" value="$(arg num_samples)"/>
+    <param name="optimize_frequency" value="$(arg optimize_frequency)"/>
   </node>
 </launch>

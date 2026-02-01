@@ -23,3 +23,9 @@ venv/
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# big data files
+*.bag
+*.bag.active
+*.json
+*.csv
