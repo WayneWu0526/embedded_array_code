@@ -2,7 +2,7 @@
   <!-- Arguments for tools -->
   <!-- 1. magnetometer_array, 2. electronic_magnet -->
   <!-- 1. calibrated_em, 2. calibrated_magmeterarray -->
-  <arg name="diana7_tool" default="calibrated_magmeterarray"/> 
+  <arg name="diana7_tool" default="magnetometer_array"/> 
   <!-- Tools options -->
   <arg name="arm1_tool" default="calibrated_em"/>
   <arg name="arm2_tool" default="calibrated_em"/>
@@ -29,13 +29,13 @@
   </include>
 
   <!-- Path Generation -->
-  <arg name="path_type" default="cone" doc="Options: cubic, screw, infinite, mesh, cone, path1, path2, path3"/>
+  <arg name="path_type" default="rotation" doc="Options: cubic, screw, infinite, mesh, cone, sphere, rotation, path1, path2, path3"/>
   <node name="path_generator" pkg="triple_arm_task" type="generate_paths.py" output="screen" args="--type $(arg path_type)"/>
 
   <arg name="path_file" default="$(find triple_arm_task)/config/paths/current_path.csv"/>
   <arg name="loop_path" default="false"/>
   <arg name="connect_wait_time" default="5.0"/>
-  <arg name="manual_confirm" default="true"/>
+  <arg name="manual_confirm" default="false"/>
   <arg name="speed_scaling" default="0.03"/>
   <arg name="num_samples" default="10"/>
   <arg name="optimize_frequency" default="10"/>

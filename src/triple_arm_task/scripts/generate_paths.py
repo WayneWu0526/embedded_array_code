@@ -48,14 +48,18 @@ def quat2mat(q):
     ])
 
 # Get package path
-rospack = rospkg.RosPack()
-pkg_path = rospack.get_path('triple_arm_task')
+try:
+    rospack = rospkg.RosPack()
+    pkg_path = rospack.get_path('triple_arm_task')
+except:
+    # Fallback to current dir if rospack fails in some envs
+    pkg_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def main():
     # Use rospy.myargv() to filter out ROS-internal arguments (__name, __log, etc.)
     my_argv = rospy.myargv(sys.argv)
     parser = argparse.ArgumentParser(description="Generate scanning paths based on start positions.")
-    parser.add_argument('--type', type=str, default='cubic', choices=['cubic', 'screw', 'infinite', 'mesh', 'cone', 'path1', 'path2', 'path3'],
+    parser.add_argument('--type', type=str, default='cubic', choices=['cubic', 'screw', 'infinite', 'mesh', 'cone', 'sphere', 'rotation', 'path1', 'path2', 'path3'],
                         help='Type of path to generate (default: cubic)')
     args = parser.parse_args(my_argv[1:])
 
@@ -68,7 +72,8 @@ def main():
     config_path = os.path.join(pkg_path, 'config', 'start_positions.yaml')
     if not os.path.exists(config_path):
         print(f"Error: {config_path} not found. Please run initialize_scan.py first.")
-        exit(1)
+        # Fallback for preview generation when file doesn't exist? No, we need start pos.
+        sys.exit(1)
 
     with open(config_path, 'r') as f:
         config_data = yaml.safe_load(f)
@@ -93,39 +98,39 @@ def main():
         print(f"Generated {filepath}")
 
     if args.type == 'cubic':
-        # 1. Cubic Path
-        L, W, H = 0.1, 0.1, 0.1 # unit: meters
+        # 1. Cubic Path (Depth along Local Z)
+        L, W, D = 0.1, 0.1, 0.1 # unit: meters
         waypoints_rel = [
-            np.array([L, W/2, 0]), np.array([0, W/2, 0]),
-            np.array([0, W/2, H]), np.array([L, W/2, H]),
-            np.array([L, -W/2, H]), np.array([0, -W/2, H]),
-            np.array([0, -W/2, 0]), np.array([L, W/2, 0])
+            np.array([L/2, W/2, 0]),   np.array([-L/2, W/2, 0]),
+            np.array([-L/2, W/2, D]),  np.array([L/2, W/2, D]),
+            np.array([L/2, -W/2, D]),  np.array([-L/2, -W/2, D]),
+            np.array([-L/2, -W/2, 0]), np.array([L/2, W/2, 0])
         ]
-        points = [start_pos + p for p in waypoints_rel]
+        points = [start_pos + R_base @ p for p in waypoints_rel]
         write_csv('current_path.csv', points)
 
     elif args.type == 'screw':
-        # 2. Screw Path (Helix)
+        # 2. Screw Path (Helix along Local Z)
         t = np.linspace(0, 4*np.pi, 200)
         radius = 0.05
+        pitch = 0.02
         points = []
         for ti in t:
-            y = start_pos[1] + 0.02 * ti
-            x = start_pos[0] + radius * np.sin(ti)
-            z = start_pos[2] + radius * (np.cos(ti) - 1)
-            points.append([x, y, z])
+            p_rel = np.array([radius * np.cos(ti), radius * np.sin(ti), pitch * ti])
+            points.append(start_pos + R_base @ p_rel)
         write_csv('current_path.csv', points)
 
     elif args.type == 'infinite':
-        # 3. Infinite Path (Lemniscate)
+        # 3. Infinite Path (Lemniscate in Local XY plane)
         t = np.linspace(0, 2*np.pi, 200)
         a = 0.15
         points = []
         for ti in t:
             den = 1 + np.sin(ti)**2
-            y_offset = (a * np.cos(ti)) / den
-            z_offset = (a * np.sin(ti) * np.cos(ti)) / den
-            points.append([start_pos[0], start_pos[1] + y_offset, start_pos[2] + z_offset])
+            x_rel = (a * np.cos(ti)) / den
+            y_rel = (a * np.sin(ti) * np.cos(ti)) / den
+            p_rel = np.array([x_rel, y_rel, 0])
+            points.append(start_pos + R_base @ p_rel)
         write_csv('current_path.csv', points)
 
     elif args.type == 'mesh':
@@ -147,57 +152,112 @@ def main():
                 # Flip X direction every row (S-pattern in XY)
                 x_order = x_vals if iy % 2 == 0 else x_vals[::-1]
                 for x in x_order:
-                    points.append([start_pos[0] + x, start_pos[1] + y, start_pos[2] + z])
+                    # Apply R_base for transformation
+                    p_rel = np.array([x, y, z])
+                    points.append(start_pos + R_base @ p_rel)
         
-        print(f"Generated mesh path with {len(points)} points ({N}x{N}x{N} grid)")
+        print(f"Generated mesh path (aligned) with {len(points)} points ({N}x{N}x{N} grid)")
         write_csv('current_path.csv', points)
 
     elif args.type == 'cone':
-        # 5. Spiral Cone Path: Axis is Local Z (maps to World X)
-        # Apex at Local Z = +10cm (World X +10cm from center)
-        # Base at Local Z = -10cm (World X -10cm from center)
-        N = 30
-        M = 4
-        R_max = 0.075 # Max radius (Diameter 15cm)
-        L = 0.15       # Total depth along Z
+        # 5. Cone Path: Spiral from Base to Tip
+        # Start at Base (R=8cm, Z=-10cm) -> End at Tip (R=0, Z=0)
+        # Sequence adjusted: Starts 10cm further back and ends at the robot's initial position.
+        N = 200    # Increased points
+        M = 10     # Increased turns
+        R = 0.08   # Base Radius
+        Z_start = -0.1 # Starting depth (-10cm)
+        Z_end = 0.0    # Ending depth (Initial position)
         
-        # --- Constant Arc-Length Sampling ---
-        t_fine = np.linspace(0, 1, 1000)
-        z_f = 0.1 - L * t_fine # From +10cm to -10cm (Axial along Local Z)
-        r_f = R_max * t_fine   # From 0 (Apex) to R_max (Base)
-        theta_f = 2 * np.pi * M * t_fine
-        x_f = r_f * np.cos(theta_f) # Radial
-        y_f = r_f * np.sin(theta_f) # Radial
-        
-        points_f = np.stack([x_f, y_f, z_f], axis=1)
-        diffs = np.diff(points_f, axis=0)
-        arc_length = np.concatenate([[0], np.cumsum(np.sqrt(np.sum(diffs**2, axis=1)))])
-        
-        s_uniform = np.linspace(0, arc_length[-1], N)
-        t_reordered = np.interp(s_uniform, arc_length, t_fine)
-        # -------------------------------------
-
         points = []
         quaternions = []
-        apex_rel = np.array([0, 0, 0.1]) # Vertex point (Local Z = 0.1)
-
-        for t in t_reordered:
-            # 1. Position (Spiral starts at Apex and expands towards Base)
-            theta = 2 * np.pi * M * t
-            # [Radial X, Radial Y, Axial Z]
-            p_rel = np.array([R_max * t * np.cos(theta), R_max * t * np.sin(theta), 0.1 - L * t])
+        
+        for i in range(N):
+            t = i / (N - 1)
+            curr_r = R * (1 - t) # Shrinks to 0
+            curr_z = Z_start + t * (Z_end - Z_start) # Moves from -10cm to 0
+            theta = 2.0 * np.pi * M * t
+            
+            p_rel = np.array([curr_r * np.cos(theta), curr_r * np.sin(theta), curr_z])
             points.append(start_pos + R_base @ p_rel)
             
-            # 2. Orientation (Local Z pointing towards the Apex [0, 0, 0.1])
-            v_z_local = apex_rel - p_rel
+            # Orientation: Local Z axis points to the vertex at [0, 0, Z_end]
+            # Since Z_end = 0, target is [0,0,0]
+            v_z_local = np.array([0, 0, Z_end]) - p_rel
             if np.linalg.norm(v_z_local) < 1e-6:
-                v_z_local = np.array([0, 0, 1]) # At the apex
+                v_z_local = np.array([0.0, 0.0, 1.0]) # At Tip: Aligns with Start Pose Z
             else:
                 v_z_local /= np.linalg.norm(v_z_local)
             
-            # Consistent X-Y stabilization:
-            # v_x = v_z cross [0, -1, 0] to ensure apex orientation matches start_position (Identity in Local Frame)
-            v_x_local = np.cross(v_z_local, np.array([0.0, -1.0, 0.0]))
+            # X-Axis constraints: "Tip pose should match robot start position"
+            # Using [0, -1, 0] as reference to ensure Identity rotation at Tip
+            ref_vec = np.array([0.0, -1.0, 0.0]) 
+            
+            v_x_local = np.cross(v_z_local, ref_vec)
+            if np.linalg.norm(v_x_local) < 1e-6:
+                v_x_local = np.cross(v_z_local, np.array([1.0, 0.0, 0.0]))
+            v_x_local /= np.linalg.norm(v_x_local)
+            
+            # Y = Z cross X
+            v_y_local = np.cross(v_z_local, v_x_local)
+            
+            Rot_local = np.column_stack([v_x_local, v_y_local, v_z_local])
+            quaternions.append(mat2quat(R_base @ Rot_local))
+            
+        print(f"Generated Spiral Cone Path (Base to Tip). Points: {N}")
+        write_csv('current_path.csv', points, quaternions)
+
+    elif args.type == 'sphere':
+        # 6. Sphere Path: Hemispherical Spiral
+        # Requirements: Start at Equator (high Phi), Spiral to Pole (Phi=0)
+        # Pole is at [0,0,0] (Robot Start Pos)
+        N = 200  # Points
+        M = 8    # Turns
+        R = 0.1  # Radius of sphere curvature
+        
+        # Phi: 0 is Pole (+Z), Pi/2 is Equator
+        # We start at phi_start (e.g. 60 deg) and go to 0.
+        # But we need to map Sphere Pole to Local Origin [0,0,0]
+        # Standard sphere centered at [0,0,0]: pole at [0,0,R]
+        # We want Pole at [0,0,0], so Center is at [0,0,-R]
+        
+        phi_start = np.pi / 3  # 60 degrees latitude
+        phi_end = 0.0          # Pole (0 degrees)
+        
+        points = []
+        quaternions = []
+        
+        for i in range(N):
+            t = i / (N - 1)
+            phi = phi_start + t * (phi_end - phi_start) # Decreasing phi
+            theta = 2.0 * np.pi * M * t
+            
+            # Parametric equation relative to Center [0,0,-R]
+            # Surface Point P_surf = Center + R * [sin(phi)cos(theta), sin(phi)sin(theta), cos(phi)]
+            # Z component: -R + R*cos(phi) = R(cos(phi)-1). 
+            # Check: when phi=0, z=0 (Correct). when phi=90, z=-R.
+            
+            x_rel = R * np.sin(phi) * np.cos(theta)
+            y_rel = R * np.sin(phi) * np.sin(theta)
+            z_rel = R * np.cos(phi) - R
+            
+            p_rel = np.array([x_rel, y_rel, z_rel])
+            points.append(start_pos + R_base @ p_rel)
+            
+            # Orientation: Keep TCP Z pointing to Tip (Start Pos [0,0,0])
+            # This is equivalent to pointing "Normal to surface" for a concave scan?
+            # Or "Focus at Point"? 
+            # User logic has been "Look at Tip". Tip is at [0,0,0].
+            
+            v_z_local = np.array([0, 0, 0]) - p_rel
+            if np.linalg.norm(v_z_local) < 1e-6:
+                 v_z_local = np.array([0.0, 0.0, 1.0])
+            else:
+                 v_z_local /= np.linalg.norm(v_z_local)
+            
+            # X-Axis constraint (same as Cone for consistency)
+            ref_vec = np.array([0.0, -1.0, 0.0])
+            v_x_local = np.cross(v_z_local, ref_vec)
             if np.linalg.norm(v_x_local) < 1e-6:
                 v_x_local = np.cross(v_z_local, np.array([1.0, 0.0, 0.0]))
             v_x_local /= np.linalg.norm(v_x_local)
@@ -206,53 +266,48 @@ def main():
             Rot_local = np.column_stack([v_x_local, v_y_local, v_z_local])
             quaternions.append(mat2quat(R_base @ Rot_local))
             
-        print(f"Fixed Cone Path (Axis along World X): Points: 30, Apex at World-X +10cm")
+        print(f"Generated Sphere Path (Spiral to Tip). Points: {N}")
         write_csv('current_path.csv', points, quaternions)
 
-    elif args.type == 'path1':
-        # 6. Path 1: Hemispherical Spiral (Restore to original working version)
-        N = 200  # Points
-        M = 8    # Turns
-        R = 0.1
+    elif args.type == 'rotation':
+        # 7. Rotation Spiral: Fixed Position, Spiraling Orientation
+        # Position: Fixed at start_pos
+        # Orientation: Z-axis spirals out from Center (0 deg) to Boundary (30 deg)
+        N = 50
+        M = 4
+        Max_Angle = np.radians(30)
         
-        # --- Constant Arc-Length Sampling ---
-        phi_fine = np.linspace(0, np.pi/2, 1000)
-        z_f = -R * np.cos(phi_fine)
-        r_f = R * np.sin(phi_fine)
-        theta_f = 2 * np.pi * M * (phi_fine / (np.pi/2))
-        x_f = r_f * np.cos(theta_f)
-        y_f = r_f * np.sin(theta_f)
-        
-        points_f = np.stack([x_f, y_f, z_f], axis=1)
-        diffs = np.diff(points_f, axis=0)
-        arc_length = np.concatenate([[0], np.cumsum(np.sqrt(np.sum(diffs**2, axis=1)))])
-        
-        s_uniform = np.linspace(0, arc_length[-1], N)
-        phi_reordered = np.interp(s_uniform, arc_length, phi_fine)
-        # -------------------------------------
-
         points = []
         quaternions = []
         
-        for phi in phi_reordered:
-            # 1. Position
-            theta = 2 * np.pi * M * (phi / (np.pi/2))
-            p_rel = np.array([R * np.sin(phi) * np.cos(theta), R * np.sin(phi) * np.sin(theta), -R * np.cos(phi)])
+        for i in range(N):
+            t = i / (N - 1)
+            phi = t * Max_Angle  # 0 -> 30 deg
+            theta = 2.0 * np.pi * M * t
+            
+            # Position is constant (all at start_pos)
+            p_rel = np.array([0.0, 0.0, 0.0])
             points.append(start_pos + R_base @ p_rel)
             
-            # 2. Orientation (Pointing to center of sphere [0,0,0])
-            v_z_local = -p_rel / np.linalg.norm(p_rel) if np.linalg.norm(p_rel) > 1e-6 else np.array([0, 0, 1])
+            # Orientation: Z-axis spirals around local +Z
+            # In local frame:
+            vz_x = np.sin(phi) * np.cos(theta)
+            vz_y = np.sin(phi) * np.sin(theta)
+            vz_z = np.cos(phi)
+            v_z_local = np.array([vz_x, vz_y, vz_z])
             
-            v_x_local = np.cross(np.array([1.0, 0.0, 0.0]), v_z_local)
+            # X-Axis constraint for consistency
+            ref_vec = np.array([0.0, -1.0, 0.0])
+            v_x_local = np.cross(v_z_local, ref_vec)
             if np.linalg.norm(v_x_local) < 1e-6:
-                v_x_local = np.cross(np.array([0.0, 1.0, 0.0]), v_z_local)
+                v_x_local = np.cross(v_z_local, np.array([1.0, 0.0, 0.0]))
             v_x_local /= np.linalg.norm(v_x_local)
             v_y_local = np.cross(v_z_local, v_x_local)
             
             Rot_local = np.column_stack([v_x_local, v_y_local, v_z_local])
             quaternions.append(mat2quat(R_base @ Rot_local))
             
-        print(f"Restored Hemispherical Spiral (Path1) with {N} points.")
+        print(f"Generated Rotation Spiral. Points: {N}")
         write_csv('current_path.csv', points, quaternions)
 
     elif args.type == 'path2':

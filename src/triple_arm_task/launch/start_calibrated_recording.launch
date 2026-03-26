@@ -1,0 +1,29 @@
+<launch>
+  <!-- 机械臂端工具参数：均设置为已标定的电磁铁组合 -->
+  <arg name="diana7_tool" default="calibrated_em"/> 
+  <arg name="arm1_tool" default="calibrated_em"/>
+  <arg name="arm2_tool" default="calibrated_em"/>
+
+  <!-- 高频采样参数 -->
+  <arg name="sampling_rate" default="50.0" doc="采样频率 (Hz)"/>
+  <arg name="max_samples" default="200" doc="200组后自动退出"/>
+
+  <!-- 启动底层传感器处理节点 -->
+  <node name="serial_node" pkg="serial_processor" type="serial_node.py" output="screen"/>
+
+  <!-- 启动三臂硬件及 MoveIt (包括 TF 广播) -->
+  <include file="$(find zlab_robots_bringup)/launch/triple_arm/triple_arm_bringup.launch">
+    <arg name="diana7_tool" value="$(arg diana7_tool)"/>
+    <arg name="arm1_tool" value="$(arg arm1_tool)"/>
+    <arg name="arm2_tool" value="$(arg arm2_tool)"/>
+    <arg name="use_rviz" value="true"/>
+  </include>
+
+  <!-- 启动高频采样记录节点 -->
+  <node name="calibrated_recorder" pkg="triple_arm_task" type="calibrated_recorder.py" output="screen">
+    <param name="sampling_rate" value="$(arg sampling_rate)"/>
+    <param name="max_samples" value="$(arg max_samples)"/>
+    <param name="save_interval" value="100"/>
+  </node>
+
+</launch>

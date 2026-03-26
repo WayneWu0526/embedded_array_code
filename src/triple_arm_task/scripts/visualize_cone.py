@@ -41,40 +41,51 @@ def main():
             quats.append([float(row['qx']), float(row['qy']), float(row['qz']), float(row['qw'])])
     points = np.array(points)
 
-    fig = plt.figure(figsize=(12, 10))
+    fig = plt.figure(figsize=(14, 10))
     ax = fig.add_subplot(111, projection='3d')
 
-    ax.scatter(start_pos[0], start_pos[1], start_pos[2], color='red', s=100, label='Start Position (Center)')
+    # 1. Plot ALL points as small dots to show full density
+    ax.scatter(points[:, 0], points[:, 1], points[:, 2], color='blue', s=5, alpha=0.3, label='Planned Waypoints')
+
+    # 2. Plot robot starting/target center position
+    ax.scatter(start_pos[0], start_pos[1], start_pos[2], color='red', s=120, label='Robot Start Position (Tip Goal)')
     
+    # 3. Plot Local Reference Coordinates at start_pos
     axis_len = 0.05
-    colors = ['r', 'g', 'b'] # X, Y, Z
-    labels = ['Base-X', 'Base-Y', 'Base-Z']
+    colors = ['r', 'g', 'b'] 
+    labels = ['Local-X', 'Local-Y', 'Local-Z (Depth)']
     for i in range(3):
         axis_vec = R_base[:, i] * axis_len
         ax.quiver(start_pos[0], start_pos[1], start_pos[2], 
                   axis_vec[0], axis_vec[1], axis_vec[2], 
-                  color=colors[i], label=labels[i], arrow_length_ratio=0.1)
+                  color=colors[i], label=labels[i] if i==2 else None, arrow_length_ratio=0.1)
 
-    ax.plot(points[:, 0], points[:, 1], points[:, 2], 'k--', alpha=0.5, label='Path Trajectory')
+    # 4. Plot Path Line
+    ax.plot(points[:, 0], points[:, 1], points[:, 2], 'k-', alpha=0.2, linewidth=1)
     
-    ax.scatter(points[0, 0], points[0, 1], points[0, 2], color='green', s=100, marker='o', label='Trajectory StartPoint')
-    ax.scatter(points[-1, 0], points[-1, 1], points[-1, 2], color='orange', s=100, marker='*', label='Trajectory EndPoint (Tip)')
+    # 5. Highlight Start (Base) and End (Tip)
+    ax.scatter(points[0, 0], points[0, 1], points[0, 2], color='green', s=150, marker='o', label='Trajectory START (Base -10cm)')
+    ax.scatter(points[-1, 0], points[-1, 1], points[-1, 2], color='orange', s=150, marker='*', label='Trajectory END (Tip at Center)')
 
+    # 6. Sample TCP orientations (Partial axes for clarity)
+    # We show full X (Red), Y (Green), Z (Blue) for 10 samples
     step = max(1, len(points) // 10)
     for i in range(0, len(points), step):
         p = points[i]
         R = quat2mat(quats[i])
-        # Tool axes: Red (X), Green (Y), Blue (Z)
-        ax.quiver(p[0], p[1], p[2], R[0,0]*0.02, R[1,0]*0.02, R[2,0]*0.02, color='red', alpha=0.5, label='TCP X' if i==0 else "")
-        ax.quiver(p[0], p[1], p[2], R[0,1]*0.02, R[1,1]*0.02, R[2,1]*0.02, color='green', alpha=0.5, label='TCP Y' if i==0 else "")
-        ax.quiver(p[0], p[1], p[2], R[0,2]*0.03, R[1,2]*0.03, R[2,2]*0.03, color='blue', alpha=0.8, label='TCP Z' if i==0 else "")
+        
+        # Scale for tool axes
+        ax.quiver(p[0], p[1], p[2], R[0, 0]*0.02, R[1, 0]*0.02, R[2, 0]*0.02, color='red', alpha=0.7)   # X
+        ax.quiver(p[0], p[1], p[2], R[0, 1]*0.02, R[1, 1]*0.02, R[2, 1]*0.02, color='green', alpha=0.7) # Y
+        ax.quiver(p[0], p[1], p[2], R[0, 2]*0.03, R[1, 2]*0.03, R[2, 2]*0.03, color='blue', alpha=0.9)  # Z
 
     ax.set_xlabel('World X')
     ax.set_ylabel('World Y')
     ax.set_zlabel('World Z')
-    ax.set_title('Path Visualization (World Frame)')
-    ax.legend()
+    ax.set_title('Path Visualization (Updated X-Axis Logic: Z x [0,0,-1])')
+    ax.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
 
+    # Scaling adjustment to keep aspect ratio
     all_pts = np.vstack([points, start_pos])
     max_range = np.array([all_pts[:,0].max()-all_pts[:,0].min(), 
                          all_pts[:,1].max()-all_pts[:,1].min(), 
@@ -85,10 +96,8 @@ def main():
     ax.set_xlim(mid_x - max_range, mid_x + max_range)
     ax.set_ylim(mid_y - max_range, mid_y + max_range)
     ax.set_zlim(mid_z - max_range, mid_z + max_range)
-    
-    # 强制 3D 箱体长宽高比例一致，防止视觉拉伸
-    ax.set_box_aspect([1, 1, 1])
 
+    plt.tight_layout()
     output_png = '/home/zhang/embedded_array_ws/src/triple_arm_task/config/paths/trajectory_preview.png'
     plt.savefig(output_png)
     print(f"Success: Visualization saved to {output_png}")
