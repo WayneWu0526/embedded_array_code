@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>sensor_data_collection</name>
+  <version>0.1.0</version>
+  <description>Multi-sensor data collection task for signal generator, hall sensors, and visual localization</description>
+  <maintainer email="zhang@example.com">zhang</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>roscpp</depend>
+  <depend>rospy</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf</depend>
+  <depend>serial_processor</depend>
+  <depend>signal_generator</depend>
+
+  <exec_depend>zlab_robots_calibration</exec_depend>
+
+  <export>
+  </export>
+</package>

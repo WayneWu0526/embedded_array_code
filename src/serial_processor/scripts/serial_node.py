@@ -9,24 +9,33 @@ from serial_processor.srv import GetHallData, GetHallDataResponse
 class SerialNode:
     def __init__(self):
         rospy.init_node('serial_processor_node', anonymous=True)
-        
+
         # 获取参数
         self.port = rospy.get_param('~port', '/dev/ttyACM0')
         self.baudrate = rospy.get_param('~baudrate', 921600)
-        
+        self.pub_rate = rospy.get_param('~pub_rate', 100)  # 发布频率上限 Hz
+
         # 转换系数: 32768 -> 32Gs => 1 LSB = 32/32768 Gs
         self.scale = 32.0 / 32768.0
-        
+
         # 内部存储最新数据和时间戳
         self.latest_sensors = [Vector3() for _ in range(12)]
         self.latest_timestamp = rospy.Time.now()
         self.data_lock = threading.Lock()
-        
-        # 初始化服务
+
+        # 初始化服务（保留，兼容旧代码）
         self.srv = rospy.Service('get_hall_data', GetHallData, self.handle_get_hall_data)
-        
+
+        # 初始化Topic发布者 - 新增：持续发布最新数据
+        # 注意：这里我们发布的是 Response 类型，虽然不规范，但这是目前的实现方式
+        self.pub = rospy.Publisher('hall_data', GetHallDataResponse, queue_size=100)
+
         # 初始化订阅者，用于向下位机发送数据
         self.sub = rospy.Subscriber('serial_send', String, self.send_callback)
+
+        # 控制发布频率
+        self.last_pub_time = rospy.Time.now()
+        self.min_interval = rospy.Duration(1.0 / self.pub_rate)
         
         self.ser = None
         self.connect()
@@ -49,6 +58,15 @@ class SerialNode:
             res.header.frame_id = "hall_array_frame"
             res.sensors = self.latest_sensors
         return res
+
+    def _publish_hall_data(self):
+        """Topic方式发布Hall传感器数据"""
+        msg = GetHallDataResponse()
+        with self.data_lock:
+            msg.header.stamp = self.latest_timestamp
+            msg.header.frame_id = "hall_array_frame"
+            msg.sensors = self.latest_sensors
+        self.pub.publish(msg)
 
     def send_callback(self, msg):
         if self.ser and self.ser.is_open:
@@ -90,6 +108,12 @@ class SerialNode:
                         with self.data_lock:
                             self.latest_sensors = sensors
                             self.latest_timestamp = rospy.Time.now()
+
+                        # Topic发布：控制频率不超过 pub_rate
+                        now = rospy.Time.now()
+                        if now - self.last_pub_time >= self.min_interval:
+                            self._publish_hall_data()
+                            self.last_pub_time = now
                 else:
                     import time
                     time.sleep(0.001)

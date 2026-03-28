@@ -49,11 +49,12 @@ find_package(catkin REQUIRED COMPONENTS
 ##   * add every package in MSG_DEP_SET to generate_messages(DEPENDENCIES ...)
 
 ## Generate messages in the 'msg' folder
-# add_message_files(
-#   FILES
-#   Message1.msg
-#   Message2.msg
-# )
+add_message_files(
+  FILES
+  SensorData.msg
+  StmUplink.msg
+  StmDownlink.msg
+)
 
 ## Generate services in the 'srv' folder
 add_service_files(
@@ -163,6 +164,8 @@ include_directories(
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
   scripts/serial_node.py
+  scripts/serial_node_tdm.py
+  scripts/mock_stm_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

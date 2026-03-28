@@ -1,0 +1,45 @@
+# CVT (Constant-Voltage Mode) 信号参数
+# 时间常数较长，settling time = 5τ，频率较低
+
+search_ports:
+  - "/dev/ttyUSB0"
+baudrate: 115200
+
+# TDM 时序参数
+tdm:
+  M: 3                    # EM 源数量
+  Ts: 0.012              # 采样周期 (s)
+  k_tau: 5               # τ 倍数 (CVT 模式需要 5τ)
+  # 计算得出:
+  # tau = L/R
+  # T_delta = k_tau * tau + Ts = 0.06 + 0.012 = 0.072
+  # period = (M+1) * T_delta = 4 * 0.072 = 0.288
+  # frequency = 1/period = 1/0.288 ≈ 3.472
+
+# 三通道配置 (TDM 分时复用)
+initial_configs:
+  - channel_index: 1
+    waveform: 2          # 矩形波
+    frequency: 3.472       # 由 T_delta 决定
+    amplitude: 5.0
+    offset: 2.5
+    phase: 0.0           # 第一个激活
+    duty_cycle: 25.0     # 占空比
+    output_en: true
+    output_sync: true
+  - channel_index: 2
+    waveform: 2
+    frequency: 3.472
+    amplitude: 5.0
+    offset: 2.5
+    phase: 90.0         # 第二个激活
+    duty_cycle: 25.0
+    output_en: true
+  - channel_index: 3
+    waveform: 2
+    frequency: 3.472
+    amplitude: 5.0
+    offset: 2.5
+    phase: 180.0         # 第三个激活
+    duty_cycle: 25.0
+    output_en: true

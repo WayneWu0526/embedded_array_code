@@ -1,0 +1,6 @@
+# CCI (Constant-Current Mode) 采集参数
+
+mode: 2                   # 0x02=CCI 恒流模式
+bitmap: 0x0FFF             # bit0=sensor1, bit11=sensor12, 0x0FFF=全部12个
+settling_time: 6000         # 单位 0.01ms, 例如 6000 = 60.00ms
+cycle_time: 28800          # 单位 0.01ms, 最大 10000.00ms, 例如 28800 = 288.00ms

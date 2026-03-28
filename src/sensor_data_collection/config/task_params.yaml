@@ -1,0 +1,12 @@
+# 通用任务参数
+mode: "CVT"              # 当前模式: CVT 或 CCI (切换模式时修改此处即可)
+num_cycles: 10
+output_dir: "$(find sensor_data_collection)/data"
+
+# Slot -> TF frame 映射
+# slot: "none" 表示该 slot 无 pose（仅 sensor_data）
+slot_frame_mapping:
+  "0": "diana7_em_tcp_filt"
+  "1": "arm1_em_tcp_filt"
+  "2": "arm2_em_tcp_filt"
+  "3": "none"

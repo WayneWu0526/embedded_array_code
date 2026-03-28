@@ -1,0 +1,159 @@
+# 传感器数据采集系统说明文档
+
+## 硬件：
+
+1. 上位机（ROS Noetic系统）
+2. FY8300信号发生器
+3. 传感器阵列，STM32开发板
+4. ZED2i摄像头
+
+## 硬件连接：
+
+1. ZED2i -> USB -> 上位机
+2. 传感器阵列 -> STM32开发板 -> USB -> 上位机
+3. FY8300信号发生器 -> USB -> 上位机
+4. FY8300信号发生器 -> TTL -> STM32开发板
+
+## 采集和处理流程：
+
+### 初始化：
+1. 上位机通过USB连接ZED2i摄像头，获取图像数据，以tf广播。
+2. 上位机通过USB向STM32开发板发送下行命令包（8字节），包含模式、传感器Bitmap、Settling Time等参数。
+3. 上位机通过USB连接控制FY8300信号发生器，设置所需的信号参数（频率、幅度、波形等）。
+
+### 采集：
+1. STM32自增cycle_id，初始化slot=0。
+2. STM32接收FY8300的TTL信号，等待settling time后触发传感器阵列进行数据采集。
+3. 传感器阵列采集数据，并通过USB将数据发送回上位机。
+4. 上位机接收传感器数据，查询当前时刻tf中对应slot的位姿数据，与传感器数据协同打包。
+5. 重复步骤2-4，直到收到cycle_end=1，完成当前cycle，调用GELS服务进行位姿估计。
+
+## 数据处理：
+1. 上位机每完成一个cycle，调用GELS位姿估计算法服务。
+
+## 各数据格式：
+
+### 上位机 → STM32 下行命令包（12 bytes）
+
+| 字段 | 长度 | 说明 |
+|------|------|------|
+| Header | 2 bytes | 包头，固定 `0xAA55` |
+| Version | 1 byte | 协议版本，当前 `0x01` |
+| Mode | 1 byte | 采集模式，`0x01`=恒压模式，`0x02`=恒流模式 |
+| Sensor Bitmap | 2 bytes | bit0=传感器1，bit11=传感器12，如 `0x000F` 表示启用 1,2,3,4 |
+| Settling Time | 2 bytes | 单位 0.01ms，范围 0~655.35ms（如 100ms = 10000） |
+| Cycle Time | 4 bytes | 单位 0.01ms，范围 0~10000.00ms（如 1000ms = 100000） |
+
+**示例：** `AA55 01 01 000F 2710 000186A0`
+- Header: `AA55`
+- Version: `01`
+- Mode: `01`（恒压）
+- Sensors: `000F`（启用 1,2,3,4）
+- Settling Time: `2710` = 10000 = 100.00ms
+- Cycle Time: `000186A0` = 100000 = 1000.00ms
+
+### STM32 → 上位机 回复包（3 bytes）
+
+| 字段 | 长度 | 说明 |
+|------|------|------|
+| Header | 2 bytes | 包头，固定 `0xAA55` |
+| Status | 1 byte | `0x00`=成功，`0x01`=参数错误，`0x02`=传感器编号无效，`0xFF`=未知错误 |
+
+**示例：** `AA55 00`（成功）
+
+### STM32 → 上位机 上行数据包
+
+| 字段 | 长度 | 说明 |
+|------|------|------|
+| Header | 2 bytes | 包头，固定 `0xAA55` |
+| Version | 1 byte | 协议版本，当前 `0x01` |
+| cycle_id | 2 bytes | cycle 编号（STM32 自增） |
+| slot | 1 byte | 当前 slot 序号（恒压: 0-3，恒流: 0-2） |
+| Bitmap | 2 bytes | bit0=传感器1，bit11=传感器12，如 `0x000F` 表示启用 1,2,3,4 |
+| Timestamp | 8 bytes | 采集时刻，单位微秒（μs），STM32 上电后计时 |
+| sensor_data | N×13 bytes | 每传感器: SensorID(1 byte) + X(4 bytes) + Y(4 bytes) + Z(4 bytes)，只发启用的 |
+| cycle_end | 1 byte | `0x00`=不是最后一个 slot，`0x01`=当前 cycle 的最后一个 slot |
+
+**示例：** bitmap=0x000F，恒压模式，slot=3（最后一个 slot）
+
+```
+AA55 01 0000 03 000F 00000000000000FA [01 x y z] [02 x y z] [03 x y z] [04 x y z] 01
+```
+
+- Header: `AA55`
+- Version: `01`
+- cycle_id: `0000`（第 0 个 cycle）
+- slot: `03`（第 4 个 slot，0-based）
+- Bitmap: `000F`（传感器 1,2,3,4）
+- Timestamp: `00000000000000FA` = 250 μs（示例值）
+- sensor_data: 传感器 1-4 的 xyz 数据
+- cycle_end: `01`（这是当前 cycle 的最后一个 slot）
+
+## PC 端 Cycle 组包格式
+
+PC 端将每次上行数据包与 TF 查询结果组合，存入 JSON 文件供后续算法使用。
+
+### Slot 与 Pose 对应关系（参考 frame: `lab_table`）
+
+| slot | 恒压模式 (4 slots) | 恒流模式 (3 slots) |
+|------|-------------------|-------------------|
+| 0 | `diana7_em_tcp_filt` pose + sensor_data | `diana7_em_tcp_filt` pose + sensor_data |
+| 1 | `arm1_em_tcp_filt` pose + sensor_data | `arm1_em_tcp_filt` pose + sensor_data |
+| 2 | `arm2_em_tcp_filt` pose + sensor_data | `arm2_em_tcp_filt` pose + sensor_data |
+| 3 | sensor_data only | — |
+| cycle_end | `sensor_array_filt` pose (ground truth) | `sensor_array_filt` pose (ground truth) |
+
+### JSON 文件格式
+
+```json
+{
+  "header": {
+    "cycle_id": 0,
+    "mode": "CVT",
+    "num_slots": 4
+  },
+  "stm_timestamp": 12345678,
+  "pc_timestamp": 1234567890.123,
+  "slot_data": [
+    {
+      "slot": 0,
+      "pose": {
+        "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+        "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+      },
+      "sensor_data": [
+        {"id": 1, "x": 0.0, "y": 0.0, "z": 0.0},
+        {"id": 2, "x": 0.0, "y": 0.0, "z": 0.0}
+      ]
+    }
+  ],
+  "ground_truth_pose": {
+    "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+    "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+  }
+}
+```
+
+### 字段说明
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| header.cycle_id | int | cycle 编号 |
+| header.mode | string | `"CVT"`=恒压模式，`"CCI"`=恒流模式 |
+| header.num_slots | int | 本 cycle 的 slot 总数（CVT=4, CCI=3） |
+| stm_timestamp | int | 本 cycle 最后一个 slot 的 STM32 时刻，单位微秒 |
+| pc_timestamp | float | 本 cycle 最后一个 slot 的 PC 接收时刻，单位秒 |
+| slot_data[].slot | int | slot 序号 |
+| slot_data[].pose | object | 该 slot 对应的机械臂末端位姿（CVT slot=3 时此项不存在） |
+| slot_data[].pose.position | object | xyz，单位米 |
+| slot_data[].pose.rotation | object | 四元数 xyzw |
+| slot_data[].sensor_data | array | 该 slot 的传感器采样数据 |
+| slot_data[].sensor_data[].id | int | 传感器编号 1-12 |
+| slot_data[].sensor_data[].x/y/z | float | 磁场三分量原始值 |
+| ground_truth_pose | object | sensor_array_filt 相对于 lab_table 的位姿，作为真值参考 |
+
+### 存储方式
+
+每完成一个 cycle，将上述 JSON 写入 `output_dir/cycle_{cycle_id:04d}.json`。EKF 算法服务可按需读取这些文件进行位姿估计。
+
+
