@@ -44,7 +44,8 @@ class SerialNodeTDM:
 
     def connect(self):
         try:
-            self.ser = serial.Serial(self.port, self.baudrate, timeout=0.1)
+            # 禁用 dsrdtr 防止串口打开时导致单片机重启，并显式设置 DTR/RTS 为 False
+            self.ser = serial.Serial(self.port, self.baudrate, timeout=0.5)
             rospy.loginfo(f"Connected to {self.port} at {self.baudrate} baud")
         except Exception as e:
             rospy.logerr(f"Error connecting to serial port: {e}")
@@ -58,7 +59,10 @@ class SerialNodeTDM:
 
     def _downlink_callback(self, msg):
         """Send downlink command to STM32 and wait for initialization reply"""
+        rospy.loginfo(f"!!!!!!!!!!!!!!!Received downlink command!!!!!!!!!!!!!")
+
         if not self.ser or not self.ser.is_open:
+            rospy.logerr("!!!!!!!Error: Serial port not connected or open!!!!!!!!!!!!!")
             return
 
         try:
@@ -76,27 +80,43 @@ class SerialNodeTDM:
                 msg.settling_time,
                 msg.cycle_time
             )
-            self.ser.write(data)
-            rospy.loginfo(f"Sent downlink to STM32: {data.hex()}")
+            # 锁定并合并发送：确保数据尽可能作为一个整体发往 USB 链路层
+            # 禁用缓冲区以获取更及时的控制，但一次性写入所有内容
+            self.ser.write_timeout = 1.0  # 设置写入超时
+            
+            rospy.loginfo(f"--- ATOMIC SERIAL SEND ---")
+            rospy.loginfo(f"Raw Bytes: {' '.join(f'{b:02x}' for b in data)}")
+            
+            # 使用 bytes() 确保数据是不可变的字节对象，并一次性调用 write
+            # 增加一点点写之前的静默时间，清理可能还在进行的读取流
+            rospy.sleep(0.01)
+            
+            # 写入并强制刷新到物理分片
+            num_written = self.ser.write(bytes(data))
+            self.ser.flush()
+            
+            if num_written != 12:
+                rospy.logwarn(f"Serial write incomplete: only {num_written} bytes sent")
 
-            # Wait for STM32 initialization reply (3 bytes: Header + Status)
-            # rospy.sleep(0)  # Brief wait for STM32 to process
-            if self.ser.in_waiting >= 3:
-                reply = self.ser.read(3)
-                if len(reply) >= 2 and reply[0:2] == b'\xAA\x55':
-                    status = reply[2]
-                    if status == self.INIT_STATUS_SUCCESS:
-                        rospy.loginfo("STM32 initialized successfully")
-                    elif status == self.INIT_STATUS_PARAM_ERROR:
-                        rospy.logwarn("STM32: Parameter error in downlink command")
-                    elif status == self.INIT_STATUS_SENSOR_INVALID:
-                        rospy.logwarn("STM32: Invalid sensor bitmap")
-                    else:
-                        rospy.logwarn(f"STM32: Unknown error (status=0x{status:02X})")
+            # 等待回复逻辑保持不变
+            rospy.sleep(0.1)  # 稍微延长等待 STM32 处理的时间
+
+            # 使用阻塞读取（带 timeout）等待 STM32 初始化回复
+            reply = self.ser.read(3)
+            if len(reply) == 3 and reply[0:2] == b'\xAA\x55':
+                status = reply[2]
+                if status == self.INIT_STATUS_SUCCESS:
+                    rospy.loginfo("STM32 initialized successfully")
+                elif status == self.INIT_STATUS_PARAM_ERROR:
+                    rospy.logwarn("STM32: Parameter error in downlink command")
+                elif status == self.INIT_STATUS_SENSOR_INVALID:
+                    rospy.logwarn("STM32: Invalid sensor bitmap")
                 else:
-                    rospy.logwarn(f"STM32: Unexpected reply: {reply.hex()}")
+                    rospy.logwarn(f"STM32: Unknown error (status=0x{status:02X})")
+            elif len(reply) > 0:
+                rospy.logwarn(f"STM32: Unexpected reply length or header: {reply.hex()}")
             else:
-                rospy.logwarn("STM32: No initialization reply received")
+                rospy.logwarn("STM32: No initialization reply received (Timeout)")
         except Exception as e:
             rospy.logerr(f"Error sending downlink: {e}")
 

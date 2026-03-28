@@ -1,0 +1,17 @@
+<launch>
+  <!-- Minimal test launch for STM32 communication ONLY -->
+  
+  <arg name="port" default="/dev/ttyACM1"/>
+  <arg name="mode" default="CVT"/>
+
+  <!-- Serial Node -->
+  <node name="serial_node_tdm" pkg="serial_processor" type="serial_node_tdm.py" output="screen">
+    <param name="port" value="$(arg port)"/>
+    <param name="baudrate" value="921600"/>
+  </node>
+
+  <!-- Dummy Parameter Loader for testing -->
+  <node name="param_loader" pkg="rostopic" type="rostopic" args="pub /serial_node_tdm/stm_downlink serial_processor/StmDownlink 
+    '{mode: 1, bitmap: 4095, settling_time: 6000, cycle_time: 28800}' --once" output="screen"/>
+
+</launch>

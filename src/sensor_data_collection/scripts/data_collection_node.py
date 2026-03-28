@@ -138,6 +138,8 @@ class DataCollector:
         # Subscribe to old hall_data for backward compatibility (optional)
         rospy.Subscriber('/serial_processor/hall_data', GetHallDataResponse, self._hall_callback)
 
+        rospy.sleep(0.5)  # 等待 publisher/subscriber 连接建立
+
         # Send initial downlink command to STM32
         self._send_downlink()
 
