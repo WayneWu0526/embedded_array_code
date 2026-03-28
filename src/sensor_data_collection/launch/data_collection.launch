@@ -13,7 +13,7 @@
   <!-- 2. Hall Sensor Serial Node (TDM Binary Protocol) -->
   <!-- ===================== -->
   <node name="serial_node_tdm" pkg="serial_processor" type="serial_node_tdm.py" output="screen">
-    <param name="port" value="/dev/ttyACM1"/>
+    <param name="port" value="/dev/ttyACM0"/>
     <param name="baudrate" value="921600"/>
   </node>
 

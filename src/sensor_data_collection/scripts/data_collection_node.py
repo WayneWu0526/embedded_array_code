@@ -18,6 +18,7 @@ from datetime import datetime
 from geometry_msgs.msg import TransformStamped
 from serial_processor.msg import StmUplink, StmDownlink
 from serial_processor.srv import GetHallData, GetHallDataResponse
+from std_msgs.msg import Bool
 
 
 # Mode constants
@@ -110,7 +111,14 @@ class DataCollector:
         self.num_cycles = int(rospy.get_param('~num_cycles', 10))
         self.output_dir = rospy.get_param('~output_dir',
                                           os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data'))
-        self.mode = int(rospy.get_param('~mode', MODE_CVT))
+        # Convert mode to integer: rosparam may load as string "CVT"/"CCI" or int
+        mode_raw = rospy.get_param('~mode', MODE_CVT)
+        if mode_raw == 'CVT' or mode_raw == 1 or mode_raw == '1':
+            self.mode = MODE_CVT
+        elif mode_raw == 'CCI' or mode_raw == 2 or mode_raw == '2':
+            self.mode = MODE_CCI
+        else:
+            self.mode = MODE_CVT
         self.bitmap = int(rospy.get_param('~bitmap', 0x0FFF))  # All 12 sensors
         self.settling_time = int(rospy.get_param('~settling_time', 10000))  # 100ms = 10000 units
         self.cycle_time = int(rospy.get_param('~cycle_time', 100000))  # 1000ms = 100000 units
@@ -132,6 +140,12 @@ class DataCollector:
         # Publishers
         self.pub_stm_downlink = rospy.Publisher('stm_downlink', StmDownlink, queue_size=10)
 
+        # FY8300 signal generator output control (enable after STM32 init)
+        self.pub_fy8300_ch = [
+            rospy.Publisher(f'/fy8300/ch{i}/output_en', Bool, queue_size=1)
+            for i in range(1, 4)
+        ]
+
         # Subscribers
         self.sub_stm_uplink = rospy.Subscriber('stm_uplink', StmUplink, self._uplink_callback)
 
@@ -148,11 +162,30 @@ class DataCollector:
                       f"settling_time={self.settling_time}, cycle_time={self.cycle_time}")
 
     def _init_tf(self):
-        """Initialize TF2 listener"""
+        """Initialize TF2 listener and wait for required frames to be available"""
         try:
             from tf2_ros import Buffer, TransformListener
             self.tf_buffer = Buffer()
             self.tf_listener = TransformListener(self.tf_buffer)
+
+            # Wait for required TF frames to be published
+            required_frames = ['diana7_em_tcp_filt', 'arm1_em_tcp_filt',
+                               'arm2_em_tcp_filt', 'sensor_array_filt']
+            rospy.loginfo("Waiting for TF frames to become available...")
+            for frame in required_frames:
+                timeout = 60.0  # max 60s per frame
+                rate = rospy.Rate(10)
+                t0 = rospy.Time.now()
+                while not rospy.is_shutdown():
+                    try:
+                        self.tf_buffer.lookup_transform('lab_table', frame, rospy.Time(0))
+                        rospy.loginfo(f"  {frame}: available")
+                        break
+                    except Exception:
+                        if (rospy.Time.now() - t0).to_sec() > timeout:
+                            rospy.logwarn(f"  {frame}: timeout, proceeding anyway")
+                            break
+                    rate.sleep()
             rospy.loginfo("TF2 listener initialized")
         except ImportError as e:
             rospy.logwarn(f"tf2_ros not available: {e}")
@@ -161,13 +194,22 @@ class DataCollector:
     def _send_downlink(self):
         """Send initial configuration to STM32"""
         msg = StmDownlink()
-        msg.mode = self.mode
+        # self.mode is already an integer from __init__, but double-check
+        msg.mode = int(self.mode)
         msg.bitmap = self.bitmap
         msg.settling_time = self.settling_time
         msg.cycle_time = self.cycle_time
         self.pub_stm_downlink.publish(msg)
         rospy.loginfo(f"Sent downlink: mode=0x{msg.mode:02X}, bitmap=0x{msg.bitmap:03X}, "
                       f"settling_time={msg.settling_time}, cycle_time={msg.cycle_time}")
+
+        # Enable FY8300 signal generator outputs after STM32 is initialized
+        rospy.sleep(0.2)
+        enable_msg = Bool()
+        enable_msg.data = True
+        for pub in self.pub_fy8300_ch:
+            pub.publish(enable_msg)
+        rospy.loginfo("FY8300 outputs enabled")
 
     def _lookup_pose(self, frame):
         """Look up transform from lab_table to frame"""
