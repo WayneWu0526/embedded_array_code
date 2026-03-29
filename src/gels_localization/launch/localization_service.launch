@@ -1,0 +1,7 @@
+<launch>
+  <!-- Load sensor calibration parameters -->
+  <rosparam file="$(find sensor_data_collection)/config/sensor_calibration.yaml" command="load" ns="gels_localization"/>
+
+  <!-- Start localization service -->
+  <node name="gels_localization_service" pkg="gels_localization" type="localization_service_node.py" output="screen"/>
+</launch>

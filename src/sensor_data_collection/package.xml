@@ -15,7 +15,9 @@
   <depend>tf</depend>
   <depend>serial_processor</depend>
   <depend>signal_generator</depend>
+  <depend>message_generation</depend>
 
+  <exec_depend>message_runtime</exec_depend>
   <exec_depend>zlab_robots_calibration</exec_depend>
 
   <export>

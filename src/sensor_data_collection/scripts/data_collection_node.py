@@ -13,12 +13,15 @@ Workflow:
 import rospy
 import json
 import os
+import math
 from datetime import datetime
 
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import TransformStamped, Pose
 from serial_processor.msg import StmUplink, StmDownlink
 from serial_processor.srv import GetHallData, GetHallDataResponse
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float64
+from sensor_data_collection.msg import SlotData, SensorReading
+from sensor_data_collection.srv import LocalizeCycle, LocalizeCycleRequest
 
 
 # Mode constants
@@ -46,14 +49,24 @@ class SlotBuffer:
 class CycleBuffer:
     """Buffer for a complete cycle's data"""
 
-    def __init__(self, cycle_id, mode):
+    def __init__(self, cycle_id, mode, bitmap=0x0FFF):
         self.cycle_id = cycle_id
         self.mode = mode
+        self.bitmap = bitmap
         self.num_slots = MODE_SLOT_COUNT.get(mode, 4)
         self.slots = {}  # slot -> SlotBuffer
         self.ground_truth_pose = None
         self.stm_timestamp = None
         self.pc_timestamp = None
+
+    @staticmethod
+    def _parse_bitmap(bitmap):
+        """Parse bitmap to list of sensor IDs (1-indexed)"""
+        sensor_ids = []
+        for i in range(12):
+            if bitmap & (1 << i):
+                sensor_ids.append(i + 1)
+        return sensor_ids
 
     def add_slot(self, slot_buffer):
         self.slots[slot_buffer.slot] = slot_buffer
@@ -95,6 +108,7 @@ class CycleBuffer:
                 'cycle_id': self.cycle_id,
                 'mode': mode_str,
                 'num_slots': self.num_slots,
+                'sensor_ids': self._parse_bitmap(self.bitmap),
             },
             'stm_timestamp': self.stm_timestamp,
             'pc_timestamp': self.pc_timestamp,
@@ -109,8 +123,14 @@ class DataCollector:
     def __init__(self):
         # Parameters
         self.num_cycles = int(rospy.get_param('~num_cycles', 10))
+        if self.num_cycles < 0:
+            rospy.logwarn("num_cycles is negative, clamping to 0 for uint8 cycle_num")
+            self.num_cycles = 0
+        elif self.num_cycles > 255:
+            rospy.logwarn("num_cycles exceeds uint8 range, clamping to 255 for cycle_num")
+            self.num_cycles = 255
         self.output_dir = rospy.get_param('~output_dir',
-                                          os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data'))
+                                          os.path.join(os.path.dirname(os.path.dirname(__file__)), '/home/zhang/embedded_array_ws/src/sensor_data_collection/result'))
         # Convert mode to integer: rosparam may load as string "CVT"/"CCI" or int
         mode_raw = rospy.get_param('~mode', MODE_CVT)
         if mode_raw == 'CVT' or mode_raw == 1 or mode_raw == '1':
@@ -120,11 +140,25 @@ class DataCollector:
         else:
             self.mode = MODE_CVT
         self.bitmap = int(rospy.get_param('~bitmap', 0x0FFF))  # All 12 sensors
-        self.settling_time = int(rospy.get_param('~settling_time', 10000))  # 100ms = 10000 units
-        self.cycle_time = int(rospy.get_param('~cycle_time', 100000))  # 1000ms = 100000 units
+        self.settling_time = int(rospy.get_param('~settling_time', 10000))  # 0.01ms units
+        self.sampling_time = int(rospy.get_param('~sampling_time', 1400))  # 0.01ms units
+        if self.sampling_time < 1400:
+            rospy.logwarn("sampling_time is too short, may cause issues with sensor readings, setting to minimum 1400 (14ms)")
+            self.sampling_time = 1400
+        # Calculate cycle_time: CVT=4 slots, CCI=3 slots
+        num_slots = 4 if self.mode == MODE_CVT else 3
+        self.cycle_time = num_slots * (self.settling_time + self.sampling_time)
 
-        # Load slot->frame mapping from config
-        self.slot_frame_map = rospy.get_param('~slot_frame_mapping', {})
+        # Load slot->frame mapping from config and normalize key types
+        # YAML keys may be strings or ints; rosparam always returns strings
+        raw_map = rospy.get_param('~slot_frame_mapping', {})
+        self.slot_frame_map = {}
+        for k, v in raw_map.items():
+            key = int(k)  # normalize key to int
+            if v in ('none', 'null', None):
+                self.slot_frame_map[key] = None
+            else:
+                self.slot_frame_map[key] = v
 
         # Ensure output directory exists
         os.makedirs(self.output_dir, exist_ok=True)
@@ -145,6 +179,13 @@ class DataCollector:
             rospy.Publisher(f'/fy8300/ch{i}/output_en', Bool, queue_size=1)
             for i in range(1, 4)
         ]
+        # FY8300 frequency publisher per channel
+        self.pub_fy8300_freq = [
+            rospy.Publisher(f'/fy8300/ch{i}/frequency', Float64, queue_size=1)
+            for i in range(1, 4)
+        ]
+
+        # rospy.on_shutdown(self._shutdown_fy8300)
 
         # Subscribers
         self.sub_stm_uplink = rospy.Subscriber('stm_uplink', StmUplink, self._uplink_callback)
@@ -152,7 +193,16 @@ class DataCollector:
         # Subscribe to old hall_data for backward compatibility (optional)
         rospy.Subscriber('/serial_processor/hall_data', GetHallDataResponse, self._hall_callback)
 
+        # Service client for localization
+        rospy.loginfo("Waiting for localization service...")
+        rospy.wait_for_service('localize_cycle')
+        self.localize_client = rospy.ServiceProxy('localize_cycle', LocalizeCycle)
+        rospy.loginfo("Localization service connected")
+
         rospy.sleep(0.5)  # 等待 publisher/subscriber 连接建立
+
+        # Per README initialization flow, force FY8300 to 0Hz before starting STM32.
+        self._publish_fy8300_frequency(0.0)
 
         # Send initial downlink command to STM32
         self._send_downlink()
@@ -192,6 +242,17 @@ class DataCollector:
             self.tf_buffer = None
 
     def _send_downlink(self):
+        # Calculate frequency from cycle_time (cycle_time is in 0.01ms units)
+        # frequency (Hz) = 1 / (cycle_time * 0.00001s) = 100000 / cycle_time
+        frequency = 100000.0 / self.cycle_time
+        rospy.loginfo(f"FY8300 frequency: {frequency:.3f} Hz (cycle_time={self.cycle_time})")
+
+        # Enable FY8300 signal generator outputs after STM32 is initialized
+        self._publish_fy8300_frequency(frequency)
+        self._set_fy8300_output_enabled(True)
+        rospy.loginfo("FY8300 outputs enabled")
+        rospy.sleep(10.0)
+
         """Send initial configuration to STM32"""
         msg = StmDownlink()
         # self.mode is already an integer from __init__, but double-check
@@ -199,17 +260,32 @@ class DataCollector:
         msg.bitmap = self.bitmap
         msg.settling_time = self.settling_time
         msg.cycle_time = self.cycle_time
+        msg.cycle_num = self.num_cycles
         self.pub_stm_downlink.publish(msg)
         rospy.loginfo(f"Sent downlink: mode=0x{msg.mode:02X}, bitmap=0x{msg.bitmap:03X}, "
-                      f"settling_time={msg.settling_time}, cycle_time={msg.cycle_time}")
+                  f"settling_time={msg.settling_time}, cycle_time={msg.cycle_time}, "
+              f"cycle_num={msg.cycle_num}")
 
-        # Enable FY8300 signal generator outputs after STM32 is initialized
-        rospy.sleep(0.2)
+    def _publish_fy8300_frequency(self, frequency):
+        """Publish the same FY8300 frequency to all channels."""
+        freq_msg = Float64()
+        freq_msg.data = frequency
+        for pub in self.pub_fy8300_freq:
+            pub.publish(freq_msg)
+
+    def _set_fy8300_output_enabled(self, enabled):
+        """Enable or disable all FY8300 outputs."""
         enable_msg = Bool()
-        enable_msg.data = True
+        enable_msg.data = enabled
         for pub in self.pub_fy8300_ch:
             pub.publish(enable_msg)
-        rospy.loginfo("FY8300 outputs enabled")
+
+    def _shutdown_fy8300(self):
+        """Stop FY8300 output on node shutdown."""
+        if not hasattr(self, 'pub_fy8300_freq') or not hasattr(self, 'pub_fy8300_ch'):
+            return
+        self._publish_fy8300_frequency(0.0)
+        self._set_fy8300_output_enabled(False)
 
     def _lookup_pose(self, frame):
         """Look up transform from lab_table to frame"""
@@ -242,7 +318,7 @@ class DataCollector:
 
         # Check if we need to start a new cycle
         if self.current_cycle is None or self.current_cycle.cycle_id != cycle_id:
-            self.current_cycle = CycleBuffer(cycle_id, self.mode)
+            self.current_cycle = CycleBuffer(cycle_id, self.mode, self.bitmap)
 
         # Create slot buffer
         slot_buffer = SlotBuffer(
@@ -252,9 +328,9 @@ class DataCollector:
             sensor_data=msg.sensor_data
         )
 
-        # Look up pose for this slot
+        # Look up pose for this slot (slot_frame_map keys are normalized to int)
         frame = self.slot_frame_map.get(slot)
-        if frame and frame != 'null':
+        if frame:  # frame is None for slots without pose
             slot_buffer.pose = self._lookup_pose(frame)
 
         # If cycle end, also look up ground truth pose
@@ -277,18 +353,110 @@ class DataCollector:
         # Can be used for monitoring or logging
         pass
 
+    def _sanitize_json_value(self, value, path='root'):
+        if isinstance(value, float):
+            if math.isfinite(value):
+                return value
+            rospy.logwarn(f"Replacing non-finite JSON value at {path}: {value}")
+            return None
+        if isinstance(value, dict):
+            return {
+                key: self._sanitize_json_value(subvalue, f'{path}.{key}')
+                for key, subvalue in value.items()
+            }
+        if isinstance(value, list):
+            return [
+                self._sanitize_json_value(item, f'{path}[{index}]')
+                for index, item in enumerate(value)
+            ]
+        return value
+
+    def _build_localize_request(self, cycle_data):
+        """Convert cycle_data dict to LocalizeCycle service request"""
+        req = LocalizeCycleRequest()
+        req.cycle_id = cycle_data['header']['cycle_id']
+        req.mode = cycle_data['header']['mode']
+        req.num_slots = cycle_data['header']['num_slots']
+        req.sensor_ids = cycle_data['header']['sensor_ids']
+        req.ground_truth_pose = Pose()
+
+        # slot_data
+        for slot_entry in cycle_data['slot_data']:
+            slot_msg = SlotData()
+            slot_msg.slot = slot_entry['slot']
+            # sensor_data
+            for sensor in slot_entry['sensor_data']:
+                reading = SensorReading()
+                reading.id = sensor['id']
+                reading.x = sensor['x']
+                reading.y = sensor['y']
+                reading.z = sensor['z']
+                slot_msg.sensor_data.append(reading)
+            # pose
+            if 'pose' in slot_entry and slot_entry['pose'] is not None:
+                slot_msg.pose.position.x = slot_entry['pose']['position']['x']
+                slot_msg.pose.position.y = slot_entry['pose']['position']['y']
+                slot_msg.pose.position.z = slot_entry['pose']['position']['z']
+                slot_msg.pose.orientation.x = slot_entry['pose']['rotation']['x']
+                slot_msg.pose.orientation.y = slot_entry['pose']['rotation']['y']
+                slot_msg.pose.orientation.z = slot_entry['pose']['rotation']['z']
+                slot_msg.pose.orientation.w = slot_entry['pose']['rotation']['w']
+            else:
+                slot_msg.pose = Pose()
+            req.slot_data.append(slot_msg)
+
+        # ground_truth_pose
+        if cycle_data.get('ground_truth_pose'):
+            req.ground_truth_pose.position.x = cycle_data['ground_truth_pose']['position']['x']
+            req.ground_truth_pose.position.y = cycle_data['ground_truth_pose']['position']['y']
+            req.ground_truth_pose.position.z = cycle_data['ground_truth_pose']['position']['z']
+            req.ground_truth_pose.orientation.x = cycle_data['ground_truth_pose']['rotation']['x']
+            req.ground_truth_pose.orientation.y = cycle_data['ground_truth_pose']['rotation']['y']
+            req.ground_truth_pose.orientation.z = cycle_data['ground_truth_pose']['rotation']['z']
+            req.ground_truth_pose.orientation.w = cycle_data['ground_truth_pose']['rotation']['w']
+
+        return req
+
     def _finalize_cycle(self):
-        """Process completed cycle: save to JSON and call GELS service"""
+        """Process completed cycle: call localization service and save to JSON"""
         if self.current_cycle is None:
             return
 
-        cycle_data = self.current_cycle.to_dict()
+        cycle_data = self._sanitize_json_value(self.current_cycle.to_dict())
 
-        # Save to JSON file
+        # Call localization service
+        try:
+            req = self._build_localize_request(cycle_data)
+            resp = self.localize_client(req)
+            if resp.success:
+                cycle_data['localization'] = {
+                    'pose': {
+                        'position': {
+                            'x': resp.localization_pose.position.x,
+                            'y': resp.localization_pose.position.y,
+                            'z': resp.localization_pose.position.z,
+                        },
+                        'orientation': {
+                            'x': resp.localization_pose.orientation.x,
+                            'y': resp.localization_pose.orientation.y,
+                            'z': resp.localization_pose.orientation.z,
+                            'w': resp.localization_pose.orientation.w,
+                        }
+                    },
+                    'position_error': resp.position_error,
+                    'orientation_error': resp.orientation_error,
+                }
+                rospy.loginfo(f"Localization succeeded for cycle {cycle_data['header']['cycle_id']}")
+            else:
+                rospy.logwarn(f"Localization failed for cycle {cycle_data['header']['cycle_id']}")
+        except rospy.ServiceException as e:
+            rospy.logerr(f"Localization service call failed: {e}")
+
+        # Save to JSON file (with or without localization result)
         filename = os.path.join(self.output_dir, f"cycle_{cycle_data['header']['cycle_id']:04d}.json")
         try:
             with open(filename, 'w') as f:
-                json.dump(cycle_data, f, indent=2)
+                json.dump(cycle_data, f, indent=2, allow_nan=False)
             rospy.loginfo(f"Saved cycle {cycle_data['header']['cycle_id']} to {filename}")
         except Exception as e:
             rospy.logerr(f"Failed to save cycle JSON: {e}")

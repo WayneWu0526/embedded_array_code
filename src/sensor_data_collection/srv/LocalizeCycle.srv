@@ -1,0 +1,11 @@
+uint32 cycle_id
+string mode
+uint32 num_slots
+uint32[] sensor_ids
+sensor_data_collection/SlotData[] slot_data
+geometry_msgs/Pose ground_truth_pose
+---
+bool success
+geometry_msgs/Pose localization_pose
+float64 position_error
+float64 orientation_error

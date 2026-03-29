@@ -1,7 +1,7 @@
 # CCI (Constant-Current Mode) 采集参数
 # mode 由 task_params.yaml 统一指定，此处只写本模式特有的参数
+# cycle_time 由 data_collection_node 根据 sampling_time 和 settling_time 自动计算
 
-bitmap: 0x0FFF             # bit0=sensor1, bit11=sensor12, 0x0FFF=全部12个
-settling_time: 2000         # 单位 0.01ms, 例如 6000 = 60.00ms
-sampling_time: 300          # 单位 0.01ms, 例如 3000 = 3.00ms
-cycle_time: 6900          # 单位 0.01ms, 最大 10000.00ms,
+bitmap: 0x0092             # sensor2(bit1)+sensor5(bit4)+sensor8(bit7) = 0x02+0x10+0x80
+settling_time: 2000         # 单位 0.01ms, 例如 2000 = 20.00ms
+sampling_time: 300          # 单位 0.01ms, 例如 300 = 3.00ms

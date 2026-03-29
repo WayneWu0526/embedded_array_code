@@ -3,11 +3,13 @@
   
   <arg name="port" default="/dev/ttyACM1"/>
   <arg name="mode" default="CVT"/>
+  <arg name="sensor_float_endian" default="little"/>
 
   <!-- Serial Node -->
   <node name="serial_node_tdm" pkg="serial_processor" type="serial_node_tdm.py" output="screen">
     <param name="port" value="$(arg port)"/>
     <param name="baudrate" value="921600"/>
+    <param name="sensor_float_endian" value="$(arg sensor_float_endian)"/>
   </node>
 
   <!-- Dummy Parameter Loader for testing -->

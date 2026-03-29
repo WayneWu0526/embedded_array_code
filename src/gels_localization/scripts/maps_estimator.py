@@ -65,7 +65,10 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
         B_meas = B_meas_cell[i]
 
         # (Eq. 5) Local Field Estimator
-        b_hat_locals[:, i] = (B_meas @ Q_bar @ g) / (np.linalg.norm(g)**2)
+        if Q_bar.size == 0:
+            b_hat_locals[:, i] = (B_meas @ np.ones(N)) / N
+        else:
+            b_hat_locals[:, i] = (B_meas @ Q_bar @ g) / (np.linalg.norm(g)**2)
 
         # (Eq. 8-11) Local Gradient Tensor Estimator
         B_delta = np.zeros((3, Np))

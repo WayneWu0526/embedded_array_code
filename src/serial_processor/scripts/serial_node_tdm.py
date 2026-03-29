@@ -3,16 +3,19 @@
 TDM (Time Division Multiplexing) Serial Node for STM32 communication.
 
 Binary Protocol:
-- Downlink (PC -> STM32): 12 bytes
-  Header(2) + Version(1) + Mode(1) + Bitmap(2) + SettlingTime(2) + CycleTime(4)
+- Downlink (PC -> STM32): 13 bytes
+    Header(2) + Version(1) + Mode(1) + Bitmap(2) + SettlingTime(2) + CycleTime(4) + CycleNum(1)
 - Uplink (STM32 -> PC): Variable
-  Header(2) + Version(1) + cycle_id(2) + slot(1) + Bitmap(2) + Timestamp(8) + sensor_data(N*13) + cycle_end(1)
+  Header(2) + Version(1) + cycle_id(2) + slot(1) + Bitmap(2) + Timestamp(8) + sensor_data(N*7) + cycle_end(1)
+  sensor_data: SensorID(1 byte) + X(2 bytes) + Y(2 bytes) + Z(2 bytes), signed int, scale: raw * 32/32768
 """
 
 import rospy
 import serial
 import struct
 import threading
+import math
+import glob
 from std_msgs.msg import Header
 from serial_processor.msg import SensorData, StmUplink, StmDownlink
 
@@ -20,14 +23,20 @@ from serial_processor.msg import SensorData, StmUplink, StmDownlink
 class SerialNodeTDM:
     # Protocol constants
     HEADER = 0xAA55
+    TERMINATOR = b'\r\n'
     UPLINK_MIN_SIZE = 17  # Header(2) + Version(1) + cycle_id(2) + slot(1) + Bitmap(2) + Timestamp(8) + cycle_end(1)
+    SENSOR_DATA_SIZE = 7  # SensorID(1) + X(2) + Y(2) + Z(2)
+    SCALE_FACTOR = 32.0 / 32768.0  # STM32 sends 16-bit signed int, scale to actual value
 
     def __init__(self):
         rospy.init_node('serial_node_tdm', anonymous=True)
 
         # Parameters
-        self.port = rospy.get_param('~port', '/dev/ttyACM0')
+        self.port = self._resolve_serial_port(rospy.get_param('~port', '/dev/ttyACM'))
         self.baudrate = rospy.get_param('~baudrate', 921600)
+        float_endian = str(rospy.get_param('~sensor_float_endian', 'little')).lower()
+        self.float_endian = '<' if float_endian in ('little', 'le', '<') else '>'
+        self.float_endian_name = 'little' if self.float_endian == '<' else 'big'
 
         # Serial connection
         self.ser = None
@@ -40,7 +49,34 @@ class SerialNodeTDM:
         # Subscriber for downlink commands
         self.sub = rospy.Subscriber('stm_downlink', StmDownlink, self._downlink_callback)
 
-        rospy.loginfo(f"SerialNodeTDM initialized: {self.port} at {self.baudrate} baud")
+        rospy.loginfo(
+            f"SerialNodeTDM initialized: {self.port} at {self.baudrate} baud, "
+            f"sensor_float_endian={self.float_endian_name}"
+        )
+
+    def _resolve_serial_port(self, configured_port):
+        """
+        Resolve serial port with auto-detection for '/dev/ttyACM*'.
+
+        Behavior:
+        - If configured as exact device path like '/dev/ttyACM0', use it directly.
+        - If configured as '/dev/ttyACM' (no index), auto-select from '/dev/ttyACM*'.
+        - If no candidate is found, return original configured value (connect() will report error).
+        """
+        port = str(configured_port).strip()
+
+        # Explicit indexed port, keep user preference.
+        if port.startswith('/dev/ttyACM') and len(port) > len('/dev/ttyACM'):
+            return port
+
+        if port == '/dev/ttyACM':
+            candidates = sorted(glob.glob('/dev/ttyACM*'))
+            if candidates:
+                rospy.loginfo(f"Auto-detected serial port: {candidates[0]} (candidates={candidates})")
+                return candidates[0]
+            rospy.logwarn("No /dev/ttyACM* device found, fallback to /dev/ttyACM")
+
+        return port
 
     def connect(self):
         try:
@@ -63,36 +99,39 @@ class SerialNodeTDM:
             return
 
         try:
-            # Pack 12-byte command: Header(2) + Version(1) + Mode(1) + Bitmap(2) + SettlingTime(2) + CycleTime(4)
+            # Pack 13-byte command: Header(2) + Version(1) + Mode(1) + Bitmap(2) + SettlingTime(2) + CycleTime(4) + CycleNum(1)
             # STM32 uses big-endian
             # Mode: 0x01=CVT, 0x02=CCI
             # Bitmap: bit0=sensor1, bit11=sensor12
             # SettlingTime: 0.01ms units
             # CycleTime: 0.01ms units, max 10000.00ms
-            data = struct.pack('>HBBHHI',
+            # CycleNum: total cycle count, 1 byte
+            data = struct.pack('>HBBHHIB',
                 self.HEADER,
                 0x01,  # Version
                 msg.mode,
                 msg.bitmap,
                 msg.settling_time,
-                msg.cycle_time
+                msg.cycle_time,
+                msg.cycle_num
             )
 
             rospy.sleep(0.01)
             num_written = self.ser.write(bytes(data))
             self.ser.flush()
 
-            if num_written != 12:
+            if num_written != 13:
                 rospy.logwarn(f"Serial write incomplete: only {num_written} bytes sent")
 
-            rospy.sleep(0.1)
+            # rospy.sleep(0.1)
 
             reply = self.ser.read(3)
+            rospy.loginfo(f"Initialization reply: {reply.hex()}")
             if len(reply) == 3 and reply[0:2] == b'\xAA\x55':
                 status = reply[2]
-                if status == self.INIT_STATUS_SUCCESS:
+                if status == 0:
                     rospy.loginfo("STM32 initialized successfully")
-                elif status == self.INIT_STATUS_PARAM_ERROR:
+                elif status == 1:
                     rospy.logwarn("STM32: Parameter error in downlink command")
                 elif status == self.INIT_STATUS_SENSOR_INVALID:
                     rospy.logwarn("STM32: Invalid sensor bitmap")
@@ -111,6 +150,7 @@ class SerialNodeTDM:
         Returns StmUplink message or None if parsing fails.
         """
         if len(raw_data) < self.UPLINK_MIN_SIZE:
+            rospy.logwarn(f"Uplink data too short: {len(raw_data)} bytes")
             return None
 
         try:
@@ -125,23 +165,41 @@ class SerialNodeTDM:
             bitmap = struct.unpack('>H', raw_data[6:8])[0]
             timestamp = struct.unpack('>Q', raw_data[8:16])[0]
 
-            # Parse sensor data based on bitmap
-            sensor_count = bin(bitmap).count('1')
-            expected_len = self.UPLINK_MIN_SIZE + sensor_count * 13
-
-            if len(raw_data) < expected_len:
-                rospy.logwarn(f"Data too short: need {expected_len}, got {len(raw_data)}")
+            sensor_payload_len = len(raw_data) - self.UPLINK_MIN_SIZE
+            if sensor_payload_len < 0 or sensor_payload_len % self.SENSOR_DATA_SIZE != 0:
+                rospy.logwarn(f"Invalid uplink payload length: {len(raw_data)}")
                 return None
 
             sensors = []
+            sensor_count = sensor_payload_len // self.SENSOR_DATA_SIZE
+            rospy.loginfo(f"Parsing uplink: cycle_id={cycle_id}, slot={slot}, bitmap=0x{bitmap:04X}, "
+                          f"timestamp={timestamp}, sensor_count={sensor_count}")
             offset = 16
             for _ in range(sensor_count):
-                # Unpack 13 bytes: id(1) + x(4) + y(4) + z(4) (big-endian floats)
-                sid, x, y, z = struct.unpack('>Bfff', raw_data[offset:offset+13])
+                # sensor_data format: SensorID(1 byte) + X(2 bytes) + Y(2 bytes) + Z(2 bytes), signed int16
+                sensor_chunk = raw_data[offset:offset+self.SENSOR_DATA_SIZE]
+                sid = sensor_chunk[0]
+                # STM32 sends big-endian 16-bit signed integers
+                raw_x, raw_y, raw_z = struct.unpack('>hhh', sensor_chunk[1:7])
+                x = raw_x * self.SCALE_FACTOR
+                y = raw_y * self.SCALE_FACTOR
+                z = raw_z * self.SCALE_FACTOR
+                if not all(math.isfinite(value) for value in (x, y, z)):
+                    rospy.logwarn(
+                        f"Non-finite sensor payload detected: cycle_id={cycle_id}, slot={slot}, "
+                        f"sensor_id={sid}, raw=({raw_x}, {raw_y}, {raw_z})"
+                    )
+                    return None
                 sensors.append(SensorData(id=sid, x=x, y=y, z=z))
-                offset += 13
+                offset += self.SENSOR_DATA_SIZE
 
             cycle_end = raw_data[offset]
+
+            bitmap_sensor_count = bin(bitmap).count('1')
+            if bitmap_sensor_count != sensor_count:
+                rospy.logwarn(
+                    f"Bitmap/sensor count mismatch: bitmap={bitmap_sensor_count}, parsed={sensor_count}"
+                )
 
             # Create message
             msg = StmUplink()
@@ -182,17 +240,19 @@ class SerialNodeTDM:
                             # Discard bytes before header
                             buffer = buffer[idx:]
 
-                        # Try to parse
-                        msg = self._parse_uplink(buffer)
+                        end_idx = buffer.find(self.TERMINATOR, 2)
+                        if end_idx == -1:
+                            # Wait for a full frame terminated by \r\n
+                            break
+
+                        frame = buffer[:end_idx]
+                        msg = self._parse_uplink(frame)
                         if msg is not None:
                             self.pub.publish(msg)
-                            # Remove parsed data from buffer
-                            sensor_count = bin(msg.bitmap).count('1')
-                            parsed_len = self.UPLINK_MIN_SIZE + sensor_count * 13
-                            buffer = buffer[parsed_len:]
                         else:
-                            # Need more data, wait for next read
-                            break
+                            rospy.logwarn(f"Dropping invalid uplink frame: {frame.hex()}")
+
+                        buffer = buffer[end_idx + len(self.TERMINATOR):]
                 else:
                     rospy.sleep(0.001)
             except serial.SerialException as e:

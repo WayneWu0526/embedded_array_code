@@ -17,9 +17,11 @@
 ## 采集和处理流程：
 
 ### 初始化：
+1. 若launch文件中STM32串口参数为`value="/dev/ttyACM"`则系统会自动扫描所在串口`ttyACM0 or ttyACM1`
 1. 上位机通过USB连接ZED2i摄像头，获取图像数据，以tf广播。
-2. 上位机通过USB向STM32开发板发送下行命令包（8字节），包含模式、传感器Bitmap、Settling Time等参数。
-3. 上位机通过USB连接控制FY8300信号发生器，设置所需的信号参数（频率、幅度、波形等）。
+2. 向fy8300发布设置输出频率为0，确保未开始时无输出
+3. 上位机通过USB向STM32开发板发送下行命令包（8字节），包含模式、传感器Bitmap、Settling Time等参数。
+4. 上位机通过USB连接控制FY8300信号发生器，设置所需的信号参数（频率、幅度、波形等）。
 
 ### 采集：
 1. STM32自增cycle_id，初始化slot=0。
@@ -32,6 +34,7 @@
 1. 上位机每完成一个cycle，调用GELS位姿估计算法服务。
 
 ## 各数据格式：
+**注意**:单片机在完全配置(12 sensors)时,最小采样和传输需要的时间为14.00ms,若配置文件中的`sampling_time`值小于1400,则自动计为1400(14ms)
 
 ### 上位机 → STM32 下行命令包（12 bytes）
 
@@ -43,6 +46,7 @@
 | Sensor Bitmap | 2 bytes | bit0=传感器1，bit11=传感器12，如 `0x000F` 表示启用 1,2,3,4 |
 | Settling Time | 2 bytes | 单位 0.01ms，范围 0~655.35ms（如 100ms = 10000） |
 | Cycle Time | 4 bytes | 单位 0.01ms，范围 0~10000.00ms（如 1000ms = 100000） |
+| Cycle Num | 1 bytes | 总cycle数目，若为0则一直测量，非零则测量到固定数目后传感器自动重置 |
 
 **示例：** `AA55 01 01 000F 2710 000186A0`
 - Header: `AA55`
@@ -71,8 +75,9 @@
 | slot | 1 byte | 当前 slot 序号（恒压: 0-3，恒流: 0-2） |
 | Bitmap | 2 bytes | bit0=传感器1，bit11=传感器12，如 `0x000F` 表示启用 1,2,3,4 |
 | Timestamp | 8 bytes | 采集时刻，单位微秒（μs），STM32 上电后计时 |
-| sensor_data | N×13 bytes | 每传感器: SensorID(1 byte) + X(4 bytes) + Y(4 bytes) + Z(4 bytes)，只发启用的 |
+| sensor_data | N×7 bytes | 每传感器: SensorID(1 byte) + X(2 bytes) + Y(2 bytes) + Z(2 bytes)，只发启用的. 类型为整形,真值为原始数据乘以缩放系数: `32/32768` |
 | cycle_end | 1 byte | `0x00`=不是最后一个 slot，`0x01`=当前 cycle 的最后一个 slot |
+| slot_end| 2 bytes | 数据包结束标志位`0x0D0A`，即\r\n |
 
 **示例：** bitmap=0x000F，恒压模式，slot=3（最后一个 slot）
 
