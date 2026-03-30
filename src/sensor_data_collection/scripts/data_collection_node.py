@@ -201,10 +201,22 @@ class DataCollector:
 
         rospy.sleep(0.5)  # 等待 publisher/subscriber 连接建立
 
-        # Per README initialization flow, force FY8300 to 0Hz before starting STM32.
-        self._publish_fy8300_frequency(0.0)
+        # 初始化顺序（按 README）：
+        # 1. ZED2i TF 已就绪（由 localization_tagslam.launch 保证）
+        # 2. FY8300 设置目标频率并使能输出，等待稳定
+        # 3. STM32 下行指令最后下发
 
-        # Send initial downlink command to STM32
+        # 计算频率
+        frequency = 100000.0 / self.cycle_time
+        rospy.loginfo(f"FY8300 frequency: {frequency:.3f} Hz (cycle_time={self.cycle_time})")
+
+        # FY8300 直接设置目标频率并使能输出，无需先置0
+        self._publish_fy8300_frequency(frequency)
+        self._set_fy8300_output_enabled(True)
+        rospy.loginfo("FY8300 outputs enabled, waiting for stabilization...")
+        rospy.sleep(10.0)  # 等待 FY8300 输出稳定
+
+        # 最后发送 STM32 下行指令
         self._send_downlink()
 
         rospy.loginfo(f"DataCollector initialized: mode={'CVT' if self.mode == MODE_CVT else 'CCI'}, "
@@ -242,18 +254,7 @@ class DataCollector:
             self.tf_buffer = None
 
     def _send_downlink(self):
-        # Calculate frequency from cycle_time (cycle_time is in 0.01ms units)
-        # frequency (Hz) = 1 / (cycle_time * 0.00001s) = 100000 / cycle_time
-        frequency = 100000.0 / self.cycle_time
-        rospy.loginfo(f"FY8300 frequency: {frequency:.3f} Hz (cycle_time={self.cycle_time})")
-
-        # Enable FY8300 signal generator outputs after STM32 is initialized
-        self._publish_fy8300_frequency(frequency)
-        self._set_fy8300_output_enabled(True)
-        rospy.loginfo("FY8300 outputs enabled")
-        rospy.sleep(10.0)
-
-        """Send initial configuration to STM32"""
+        """Send configuration to STM32 (FY8300 must be initialized before calling this)"""
         msg = StmDownlink()
         # self.mode is already an integer from __init__, but double-check
         msg.mode = int(self.mode)
