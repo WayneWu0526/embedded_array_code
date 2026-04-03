@@ -3,7 +3,7 @@
 # cycle_time 由 data_collection_node 根据 sampling_time 和 settling_time 自动计算
 
 bitmap: 0x0FFF             # bit0=sensor1, bit11=sensor12, 0x0FFF=全部12个
-settling_time: 30000         # 单位 0.01ms, 例如 6000 = 60.00ms
-sampling_time: 1600         # 单位 0.01ms, 例如 1200 = 12.00ms
+settling_time: 60000         # 单位 0.01ms, 例如 6000 = 60.00ms 最大：65535 = 655.35ms
+sampling_time: 60000         # 单位 0.01ms, 例如 1200 = 12.00ms 最大：65535 = 655.35ms
 
 # 288053

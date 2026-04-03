@@ -29,3 +29,6 @@ Thumbs.db
 *.bag.active
 *.json
 *.csv
+*.jpg
+*.png
+*.mp4

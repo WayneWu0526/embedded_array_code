@@ -14,7 +14,9 @@ import rospy
 import json
 import os
 import math
+import threading
 from datetime import datetime
+from collections import deque
 
 from geometry_msgs.msg import TransformStamped, Pose
 from serial_processor.msg import StmUplink, StmDownlink
@@ -27,6 +29,7 @@ from sensor_data_collection.srv import LocalizeCycle, LocalizeCycleRequest
 # Mode constants
 MODE_CVT = 0x01  # Constant Voltage Mode: 4 slots
 MODE_CCI = 0x02  # Constant Current Mode: 3 slots
+MODE_MANUAL = 0x00  # Manual trigger mode (continuous data)
 
 # Mode to slot count
 MODE_SLOT_COUNT = {
@@ -118,9 +121,16 @@ class CycleBuffer:
 
 
 class DataCollector:
-    """Main data collection node"""
+    """Main data collection node supporting both auto and manual trigger modes.
+
+    Auto mode (manual_trigger=false): FY8300 triggers cycles, STM32 sends slot data with cycle_end.
+    Manual mode (manual_trigger=true): User presses Enter to save each position, STM32 sends continuous data.
+    """
 
     def __init__(self):
+        # Check if running in manual trigger mode
+        self.manual_trigger = rospy.get_param('~manual_trigger', False)
+
         # Parameters
         self.num_cycles = int(rospy.get_param('~num_cycles', 10))
         if self.num_cycles < 0:
@@ -131,6 +141,7 @@ class DataCollector:
             self.num_cycles = 255
         self.output_dir = rospy.get_param('~output_dir',
                                           os.path.join(os.path.dirname(os.path.dirname(__file__)), '/home/zhang/embedded_array_ws/src/sensor_data_collection/result'))
+
         # Convert mode to integer: rosparam may load as string "CVT"/"CCI" or int
         mode_raw = rospy.get_param('~mode', MODE_CVT)
         if mode_raw == 'CVT' or mode_raw == 1 or mode_raw == '1':
@@ -145,9 +156,34 @@ class DataCollector:
         if self.sampling_time < 1400:
             rospy.logwarn("sampling_time is too short, may cause issues with sensor readings, setting to minimum 1400 (14ms)")
             self.sampling_time = 1400
-        # Calculate cycle_time: CVT=4 slots, CCI=3 slots
-        num_slots = 4 if self.mode == MODE_CVT else 3
-        self.cycle_time = num_slots * (self.settling_time + self.sampling_time)
+
+        # Manual mode specific parameters
+        if self.manual_trigger:
+            # num_positions: CVT=4 slots, CCI=3 slots, can be overridden
+            self.num_positions = int(rospy.get_param('~num_positions', 4 if self.mode == MODE_CVT else 3))
+            self.num_frames_to_average = int(rospy.get_param('~num_frames_to_average', 10))
+            # Load manual mode slot->frame mapping
+            raw_manual_map = rospy.get_param('~manual_slot_frame_mapping', {})
+            self.manual_slot_frame_map = {}
+            for k, v in raw_manual_map.items():
+                key = int(k)
+                if v in ('none', 'null', None):
+                    self.manual_slot_frame_map[key] = None
+                else:
+                    self.manual_slot_frame_map[key] = v
+            # Manual mode uses Mode 0x00 (continuous)
+            self.stm_mode = MODE_MANUAL
+            # Manual mode cycle tracking
+            self.cycle_id = 0
+            self.cycle_slot_data = []  # List of slot data dicts for current cycle
+            self.collected_positions = []  # List of slot indices that have been saved
+            self.slot_buffers = [deque(maxlen=self.num_frames_to_average) for _ in range(self.num_positions)]
+        else:
+            # Calculate cycle_time: CVT=4 slots, CCI=3 slots
+            num_slots = 4 if self.mode == MODE_CVT else 3
+            self.cycle_time = num_slots * (self.settling_time + self.sampling_time)
+            # Auto mode uses CVT/CCI mode for STM32
+            self.stm_mode = self.mode
 
         # Load slot->frame mapping from config and normalize key types
         # YAML keys may be strings or ints; rosparam always returns strings
@@ -174,18 +210,17 @@ class DataCollector:
         # Publishers
         self.pub_stm_downlink = rospy.Publisher('stm_downlink', StmDownlink, queue_size=10)
 
-        # FY8300 signal generator output control (enable after STM32 init)
-        self.pub_fy8300_ch = [
-            rospy.Publisher(f'/fy8300/ch{i}/output_en', Bool, queue_size=1)
-            for i in range(1, 4)
-        ]
-        # FY8300 frequency publisher per channel
-        self.pub_fy8300_freq = [
-            rospy.Publisher(f'/fy8300/ch{i}/frequency', Float64, queue_size=1)
-            for i in range(1, 4)
-        ]
-
-        # rospy.on_shutdown(self._shutdown_fy8300)
+        # FY8300 signal generator output control (only for auto mode)
+        if not self.manual_trigger:
+            self.pub_fy8300_ch = [
+                rospy.Publisher(f'/fy8300/ch{i}/output_en', Bool, queue_size=1)
+                for i in range(1, 4)
+            ]
+            # FY8300 frequency publisher per channel
+            self.pub_fy8300_freq = [
+                rospy.Publisher(f'/fy8300/ch{i}/frequency', Float64, queue_size=1)
+                for i in range(1, 4)
+            ]
 
         # Subscribers
         self.sub_stm_uplink = rospy.Subscriber('stm_uplink', StmUplink, self._uplink_callback)
@@ -201,27 +236,42 @@ class DataCollector:
 
         rospy.sleep(0.5)  # 等待 publisher/subscriber 连接建立
 
-        # 初始化顺序（按 README）：
-        # 1. ZED2i TF 已就绪（由 localization_tagslam.launch 保证）
-        # 2. FY8300 设置目标频率并使能输出，等待稳定
-        # 3. STM32 下行指令最后下发
+        if self.manual_trigger:
+            # Manual mode: start keyboard listener thread
+            rospy.loginfo(f"DataCollector initialized: mode={self._get_mode_str()}, manual_trigger=true, "
+                          f"num_positions={self.num_positions}, num_frames_to_average={self.num_frames_to_average}, "
+                          f"manual_slot_frame_mapping={self.manual_slot_frame_map}")
+            self.keyboard_thread = threading.Thread(target=self._keyboard_loop, daemon=True)
+            self.keyboard_thread.start()
+        else:
+            # Auto mode: FY8300 + STM32 initialization
+            # 初始化顺序（按 README）：
+            # 1. ZED2i TF 已就绪（由 localization_tagslam.launch 保证）
+            # 2. FY8300 设置目标频率并使能输出，等待稳定
+            # 3. STM32 下行指令最后下发
 
-        # 计算频率
-        frequency = 100000.0 / self.cycle_time
-        rospy.loginfo(f"FY8300 frequency: {frequency:.3f} Hz (cycle_time={self.cycle_time})")
+            # 计算频率
+            frequency = 100000.0 / self.cycle_time
+            rospy.loginfo(f"FY8300 frequency: {frequency:.3f} Hz (cycle_time={self.cycle_time})")
 
-        # FY8300 直接设置目标频率并使能输出，无需先置0
-        self._publish_fy8300_frequency(frequency)
-        self._set_fy8300_output_enabled(True)
-        rospy.loginfo("FY8300 outputs enabled, waiting for stabilization...")
-        rospy.sleep(10.0)  # 等待 FY8300 输出稳定
+            # FY8300 直接设置目标频率并使能输出，无需先置0
+            self._publish_fy8300_frequency(frequency)
+            self._set_fy8300_output_enabled(True)
+            rospy.loginfo("FY8300 outputs enabled, waiting for stabilization...")
+            rospy.sleep(10.0)  # 等待 FY8300 输出稳定
+
+            rospy.loginfo(f"DataCollector initialized: mode={self._get_mode_str()}, manual_trigger=false, "
+                          f"num_cycles={self.num_cycles}, bitmap=0x{self.bitmap:03X}, "
+                          f"settling_time={self.settling_time}, cycle_time={self.cycle_time}")
 
         # 最后发送 STM32 下行指令
         self._send_downlink()
 
-        rospy.loginfo(f"DataCollector initialized: mode={'CVT' if self.mode == MODE_CVT else 'CCI'}, "
-                      f"num_cycles={self.num_cycles}, bitmap=0x{self.bitmap:03X}, "
-                      f"settling_time={self.settling_time}, cycle_time={self.cycle_time}")
+    def _get_mode_str(self):
+        """Get mode as string for logging"""
+        if self.manual_trigger:
+            return f"CVT/CCI+MANUAL"
+        return 'CVT' if self.mode == MODE_CVT else 'CCI'
 
     def _init_tf(self):
         """Initialize TF2 listener and wait for required frames to be available"""
@@ -254,18 +304,24 @@ class DataCollector:
             self.tf_buffer = None
 
     def _send_downlink(self):
-        """Send configuration to STM32 (FY8300 must be initialized before calling this)"""
+        """Send configuration to STM32"""
         msg = StmDownlink()
-        # self.mode is already an integer from __init__, but double-check
-        msg.mode = int(self.mode)
+        msg.mode = int(self.stm_mode)
         msg.bitmap = self.bitmap
-        msg.settling_time = self.settling_time
-        msg.cycle_time = self.cycle_time
-        msg.cycle_num = self.num_cycles
+        if self.manual_trigger:
+            # Manual mode: continuous data, no timing
+            msg.settling_time = 0
+            msg.cycle_time = 0
+            msg.cycle_num = 0
+        else:
+            msg.settling_time = self.settling_time
+            msg.cycle_time = self.cycle_time
+            msg.cycle_num = self.num_cycles
         self.pub_stm_downlink.publish(msg)
-        rospy.loginfo(f"Sent downlink: mode=0x{msg.mode:02X}, bitmap=0x{msg.bitmap:03X}, "
-                  f"settling_time={msg.settling_time}, cycle_time={msg.cycle_time}, "
-              f"cycle_num={msg.cycle_num}")
+        mode_str = 'MANUAL' if self.manual_trigger else self._get_mode_str()
+        rospy.loginfo(f"Sent downlink: mode=0x{msg.mode:02X} ({mode_str}), bitmap=0x{msg.bitmap:03X}, "
+                      f"settling_time={msg.settling_time}, cycle_time={msg.cycle_time}, "
+                      f"cycle_num={msg.cycle_num}")
 
     def _publish_fy8300_frequency(self, frequency):
         """Publish the same FY8300 frequency to all channels."""
@@ -287,6 +343,199 @@ class DataCollector:
             return
         self._publish_fy8300_frequency(0.0)
         self._set_fy8300_output_enabled(False)
+
+    # ========== Manual Mode Methods ==========
+
+    def _get_active_slot(self):
+        """Get the next slot index to collect, or None if all slots are complete"""
+        for i in range(self.num_positions):
+            if i not in self.collected_positions:
+                return i
+        return None
+
+    def _average_sensor_data(self, buffer):
+        """Average N frames of sensor data"""
+        if not buffer:
+            return []
+        first = buffer[0]['sensor_data']
+        if not first:
+            return []
+
+        num_sensors = len(first)
+        avg_data = []
+        for sensor_idx in range(num_sensors):
+            sum_x = sum(frame['sensor_data'][sensor_idx].x for frame in buffer)
+            sum_y = sum(frame['sensor_data'][sensor_idx].y for frame in buffer)
+            sum_z = sum(frame['sensor_data'][sensor_idx].z for frame in buffer)
+            count = len(buffer)
+            reading = SensorReading()
+            reading.id = first[sensor_idx].id
+            reading.x = sum_x / count
+            reading.y = sum_y / count
+            reading.z = sum_z / count
+            avg_data.append(reading)
+        return avg_data
+
+    def _keyboard_loop(self):
+        """Listen for Enter key presses in separate thread, print status"""
+        import sys
+        if sys.platform == 'linux':
+            import tty
+            import termios
+            old_settings = termios.tcgetattr(sys.stdin)
+            try:
+                tty.setraw(sys.stdin.fileno())
+                while not rospy.is_shutdown():
+                    self._print_status()
+                    ch = sys.stdin.read(1)
+                    if ch == '\r' or ch == '\n':  # Enter key
+                        rospy.sleep(0.1)
+                        self._on_enter()
+            finally:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+        else:
+            while not rospy.is_shutdown():
+                self._print_status()
+                input("Press Enter to save position...")
+                self._on_enter()
+                rospy.sleep(0.5)
+
+    def _print_status(self):
+        """Print current status to stdout"""
+        active_slot = self._get_active_slot()
+        if active_slot is None:
+            print("\r[MANUAL] All positions collected, waiting for localization...   ")
+        else:
+            frames = len(self.slot_buffers[active_slot])
+            buf = self.slot_buffers[active_slot]
+            if buf and frames > 0:
+                latest = buf[-1]['sensor_data']
+                if latest:
+                    s = latest[0]
+                    print(f"\r[MANUAL] Slot:{active_slot} Frames:{frames}/{self.num_frames_to_average} "
+                          f"Sensors: latest(id={s.id}, x={s.x:.4f}, y={s.y:.4f}, z={s.z:.4f}) "
+                          f"Collected:{self.collected_positions}   ", end='', flush=True)
+                else:
+                    print(f"\r[MANUAL] Slot:{active_slot} Frames:{frames}/{self.num_frames_to_average} "
+                          f"Collected:{self.collected_positions}   ", end='', flush=True)
+            else:
+                print(f"\r[MANUAL] Slot:{active_slot} Frames:0/{self.num_frames_to_average} "
+                      f"Collected:{self.collected_positions}   ", end='', flush=True)
+
+    def _on_enter(self):
+        """Handle Enter key press: save current position data"""
+        active_slot = self._get_active_slot()
+        if active_slot is None:
+            print("\r[MANUAL] All positions already collected!   ")
+            return
+
+        buffer = self.slot_buffers[active_slot]
+        if len(buffer) < self.num_frames_to_average:
+            print(f"\r[MANUAL] Not enough frames: {len(buffer)}/{self.num_frames_to_average}")
+            return
+
+        # Average the sensor data
+        avg_sensor_data = self._average_sensor_data(buffer)
+
+        # Look up pose for this slot using manual_slot_frame_mapping
+        frame = self.manual_slot_frame_map.get(active_slot)
+        pose = self._lookup_pose(frame) if frame else None
+
+        # Save slot data
+        slot_entry = {
+            'slot': active_slot,
+            'sensor_data': [
+                {'id': s.id, 'x': s.x, 'y': s.y, 'z': s.z}
+                for s in avg_sensor_data
+            ],
+            'pose': pose
+        }
+        self.cycle_slot_data.append(slot_entry)
+        self.collected_positions.append(active_slot)
+
+        remaining = self.num_positions - len(self.collected_positions)
+        print(f"\r[MANUAL] Slot {active_slot} saved! {remaining} positions remaining.   ")
+        if remaining > 0:
+            rospy.loginfo(f"Slot {active_slot} saved. Need {remaining} more positions.")
+        else:
+            rospy.loginfo("All positions collected, calling localization service...")
+            self._finalize_cycle_manual()
+
+    def _finalize_cycle_manual(self):
+        """Process completed manual cycle: call localization service and save to JSON"""
+        print(f"\r[MANUAL] All positions collected! Calling localization service...   ")
+
+        # Determine mode string for JSON
+        mode_str = 'CVT' if self.mode == MODE_CVT else 'CCI'
+
+        # Build cycle data dict
+        cycle_data = {
+            'header': {
+                'cycle_id': self.cycle_id,
+                'mode': mode_str,
+                'num_slots': self.num_positions,
+                'sensor_ids': list(range(1, 13)),  # All 12 sensors
+                'num_frames_averaged': self.num_frames_to_average
+            },
+            'pc_timestamp': rospy.Time.now().to_sec(),
+            'slot_data': self.cycle_slot_data,
+            'ground_truth_pose': self.cycle_slot_data[0]['pose'] if self.cycle_slot_data else None,
+        }
+        cycle_data = self._sanitize_json_value(cycle_data)
+
+        # Call localization service
+        try:
+            req = self._build_localize_request(cycle_data)
+            resp = self.localize_client(req)
+            if resp.success:
+                cycle_data['localization'] = {
+                    'pose': {
+                        'position': {
+                            'x': resp.localization_pose.position.x,
+                            'y': resp.localization_pose.position.y,
+                            'z': resp.localization_pose.position.z,
+                        },
+                        'orientation': {
+                            'x': resp.localization_pose.orientation.x,
+                            'y': resp.localization_pose.orientation.y,
+                            'z': resp.localization_pose.orientation.z,
+                            'w': resp.localization_pose.orientation.w,
+                        }
+                    },
+                    'position_error': resp.position_error,
+                    'orientation_error': resp.orientation_error,
+                }
+                rospy.loginfo(f"Localization succeeded for cycle {cycle_data['header']['cycle_id']}")
+            else:
+                rospy.logwarn(f"Localization failed for cycle {cycle_data['header']['cycle_id']}")
+        except rospy.ServiceException as e:
+            rospy.logerr(f"Localization service call failed: {e}")
+
+        # Save to JSON file
+        filename = os.path.join(self.output_dir, f"cycle_{cycle_data['header']['cycle_id']:04d}.json")
+        try:
+            with open(filename, 'w') as f:
+                json.dump(cycle_data, f, indent=2, allow_nan=False)
+            rospy.loginfo(f"Saved cycle {cycle_data['header']['cycle_id']} to {filename}")
+        except Exception as e:
+            rospy.logerr(f"Failed to save cycle JSON: {e}")
+
+        # Increment completed cycles
+        self.completed_cycles += 1
+        rospy.loginfo(f"Completed {self.completed_cycles}/{self.num_cycles} cycles")
+
+        # Check if all cycles are done
+        if self.completed_cycles >= self.num_cycles:
+            rospy.loginfo("All cycles completed, shutting down")
+            rospy.signal_shutdown('Data collection complete')
+            return
+
+        # Reset for next cycle
+        self.cycle_id += 1
+        self.cycle_slot_data = []
+        self.collected_positions = []
+        self.slot_buffers = [deque(maxlen=self.num_frames_to_average) for _ in range(self.num_positions)]
+        print(f"[MANUAL] Cycle saved! Ready for next round.")
 
     def _lookup_pose(self, frame):
         """Look up transform from lab_table to frame"""
@@ -313,6 +562,20 @@ class DataCollector:
 
     def _uplink_callback(self, msg):
         """Handle incoming uplink data from STM32"""
+        if self.manual_trigger:
+            # Manual mode: store continuous data in buffer for later averaging
+            active_slot = self._get_active_slot()
+            if active_slot is None:
+                return  # All positions already collected
+
+            self.slot_buffers[active_slot].append({
+                'timestamp': msg.timestamp,
+                'sensor_data': msg.sensor_data,
+                'bitmap': msg.bitmap
+            })
+            return
+
+        # Auto mode: FY8300 triggered, slot-based data
         slot = msg.slot
         cycle_id = msg.cycle_id
         is_cycle_end = msg.cycle_end == 1

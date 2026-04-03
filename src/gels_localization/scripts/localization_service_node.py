@@ -53,20 +53,28 @@ MOMENT_LIST = None  # Magnetic moment for each source (slot)
 GS_TO_TESLA = 1.0e-4  # Unit conversion factor
 
 
-def load_configuration():
+def load_configuration(yaml_path=None):
     """
-    Load sensor calibration parameters.
-    - From rosparam if ROS is available
-    - From defaults if ROS is not available
+    Load sensor calibration parameters from yaml file.
+
+    Args:
+        yaml_path: Optional path to calibration yaml. If None, uses default path
+                   relative to this script: ../../../sensor_data_collection/config/sensor_calibration.yaml
     """
     global R_CORR, D_LIST, MOMENT_LIST, GS_TO_TESLA
 
-    # Default values
+    if yaml_path is None:
+        # Default yaml path: sensor_data_collection/config/sensor_calibration.yaml
+        yaml_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            '..', '..', 'sensor_data_collection', 'config', 'sensor_calibration.yaml'
+        )
+
+    # Default values (fallback only)
     r_corr_r1 = [1, 0, 0, 0, 0, -1, 0, 1, 0]
     r_corr_r2 = [1, 0, 0, 0, 0, 1, 0, -1, 0]
     r_corr_r3 = [-1, 0, 0, 0, 0, 1, 0, 1, 0]
     r_corr_r4 = [-1, 0, 0, 0, 0, -1, 0, -1, 0]
-
     de1, de2, de3 = 1.0e-3, 2.0e-3, 2.1e-3
     d_list_default = [
         [-de2/2,  de3/2, -de1], [-de2/2,  de3/2,  0   ], [-de2/2,  de3/2,  de1 ],
@@ -74,38 +82,54 @@ def load_configuration():
         [ de2/2,  de3/2, -de1], [ de2/2,  de3/2,  0   ], [ de2/2,  de3/2,  de1 ],
         [ de2/2, -de3/2, -de1], [ de2/2, -de3/2,  0   ], [ de2/2, -de3/2,  de1 ],
     ]
-
     gs_to_tesla_default = 1.0e-4
 
-    if ROS_AVAILABLE:
-        # Load from rosparam (try/except in case roscore is not running)
+    # Try to load from yaml file
+    if os.path.exists(yaml_path):
         try:
-            r_corr_r1 = rospy.get_param('~r_corr_r1', r_corr_r1)
-            r_corr_r2 = rospy.get_param('~r_corr_r2', r_corr_r2)
-            r_corr_r3 = rospy.get_param('~r_corr_r3', r_corr_r3)
-            r_corr_r4 = rospy.get_param('~r_corr_r4', r_corr_r4)
-            d_list_raw = rospy.get_param('~d_list', None)
+            import yaml
+            with open(yaml_path) as f:
+                params = yaml.safe_load(f)
+
+            # Load R_CORR
+            r_corr_r1 = params.get('r_corr_r1', r_corr_r1)
+            r_corr_r2 = params.get('r_corr_r2', r_corr_r2)
+            r_corr_r3 = params.get('r_corr_r3', r_corr_r3)
+            r_corr_r4 = params.get('r_corr_r4', r_corr_r4)
+
+            # Load D_LIST
+            d_list_raw = params.get('d_list', None)
             if d_list_raw:
                 D_LIST = np.array(d_list_raw)
             else:
                 D_LIST = np.array(d_list_default)
-            GS_TO_TESLA = rospy.get_param('~gs_to_tesla', gs_to_tesla_default)
-            print("[INFO] Configuration loaded from rosparam")
-        except (rospy.exceptions.ROSException, ConnectionRefusedError):
-            print("[WARN] ROS param server not available, using defaults")
-    else:
-        # Use defaults
-        print("[INFO] Configuration loaded from defaults (ROS not available)")
 
-    # Set R_CORR (shared by both ROS and non-ROS)
+            # Load GS_TO_TESLA
+            GS_TO_TESLA = params.get('gs_to_tesla', gs_to_tesla_default)
+
+            print(f"[INFO] Configuration loaded from {yaml_path}")
+        except Exception as e:
+            print(f"[WARN] Failed to load yaml {yaml_path}: {e}, using defaults")
+            D_LIST = np.array(d_list_default)
+            GS_TO_TESLA = gs_to_tesla_default
+    else:
+        print(f"[WARN] yaml file not found: {yaml_path}, using defaults")
+        D_LIST = np.array(d_list_default)
+        GS_TO_TESLA = gs_to_tesla_default
+
+    # Set R_CORR (column-major order, matching yaml layout)
     R_CORR = {
-        1: np.array(r_corr_r1).reshape(3, 3),
-        2: np.array(r_corr_r2).reshape(3, 3),
-        3: np.array(r_corr_r3).reshape(3, 3),
-        4: np.array(r_corr_r4).reshape(3, 3),
+        1: np.array(r_corr_r1).reshape(3, 3, order='F'),
+        2: np.array(r_corr_r2).reshape(3, 3, order='F'),
+        3: np.array(r_corr_r3).reshape(3, 3, order='F'),
+        4: np.array(r_corr_r4).reshape(3, 3, order='F'),
     }
-    D_LIST = np.array(d_list_default)
-    GS_TO_TESLA = gs_to_tesla_default
+    # R_CORR = {
+    #     1: np.array(r_corr_r1).reshape(3, 3),
+    #     2: np.array(r_corr_r2).reshape(3, 3),
+    #     3: np.array(r_corr_r3).reshape(3, 3),
+    #     4: np.array(r_corr_r4).reshape(3, 3),
+    # }        
 
 
 def get_sensor_group(sensor_id):
@@ -167,7 +191,7 @@ def compute_rotation_error(R_est, R_true):
     """
     Compute orientation error between two rotation matrices.
 
-    Formula: error = 2 * arcsin(norm(R_est - R_true, 'fro')) / (2*sqrt(2))
+    Formula: error = arccos((trace(R_est^T * R_true) - 1) / 2)
 
     Args:
         R_est: estimated rotation matrix (3x3)
@@ -210,6 +234,7 @@ def process_hall_data(sensor_readings):
         if group is not None and group in R_CORR:
             # Apply rotation correction
             b_raw = np.array([reading.x, reading.y, reading.z])
+            # meas frame to sensor frame {s}{m}_R_CORR {m}{s}_R_CORR
             b_corrected = R_CORR[group] @ b_raw
             # Unit conversion: Gs -> Tesla
             B_meas[:, i] = b_corrected * GS_TO_TESLA
@@ -254,10 +279,10 @@ def run_localization(D_cal, sources, B_meas_cell):
         B_meas_cell: list of 3 x N magnetic field matrices (one per slot)
 
     Returns:
-        tuple: (R_est, position, quaternion) or (None, None, None) on failure
+        tuple: (R_est, position, quaternion, details) or (None, None, None, None) on failure
     """
     try:
-        R_est, p_est, _ = MaPS_Estimator(D_cal, sources, B_meas_cell)
+        R_est, p_est, details = MaPS_Estimator(D_cal, sources, B_meas_cell)
         # Convert rotation matrix to quaternion [w, x, y, z]
         trace = np.trace(R_est)
         if trace > 0:
@@ -287,10 +312,10 @@ def run_localization(D_cal, sources, B_meas_cell):
                 qz = 0.25 * s
         quat = np.array([qw, qx, qy, qz])
         quat = quat / np.linalg.norm(quat)  # Normalize
-        return R_est, p_est, quat
+        return R_est, p_est, quat, details
     except Exception as e:
         print(f"[ERROR] MaPS estimation failed: {e}")
-        return None, None, None
+        return None, None, None, None
 
 
 # =============================================================================
@@ -367,7 +392,7 @@ def handle_localize_cycle(req):
         D_cal = build_D_cal(sensor_ids)
 
         # [3] Run localization
-        R_est, p_est, quat = run_localization(D_cal, sources, B_meas_cell)
+        R_est, p_est, quat, details = run_localization(D_cal, sources, B_meas_cell)
 
         if p_est is not None:
             # [4] Compute errors

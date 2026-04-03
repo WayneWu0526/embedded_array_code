@@ -7,6 +7,35 @@ import numpy as np
 from kabsch_solver import kabsch_solver
 
 
+def compute_rho_hat_eigen(X, b_hat):
+    """
+    Compute rho_hat using eigenvalue decomposition to avoid direct matrix inversion.
+
+    Formula: rho_hat = 3 / (lambda_max * lambda_min) * (X + lambda_med * I) @ b_hat
+
+    Args:
+        X: 3x3 symmetric matrix (gradient tensor)
+        b_hat: 3-vector (local field estimate)
+
+    Returns:
+        3-vector: rho_hat estimate
+    """
+    # Compute eigenvalues (sorted in ascending order by default)
+    evals = np.linalg.eigvalsh(X)
+
+    # Sort eigenvalues in descending order: lambda_max >= lambda_med >= lambda_min
+    evals_sorted = np.sort(evals)[::-1]
+    lambda_max = evals_sorted[0]
+    lambda_med = evals_sorted[1]
+    lambda_min = evals_sorted[2]
+
+    # Compute rho_hat using eigenvalue-based formula
+    # rho_hat = 3 / (lambda_max * lambda_min) * (X + lambda_med * I) @ b_hat
+    rho_hat = 3.0 / (lambda_max * lambda_min) * (X + lambda_med * np.eye(3)) @ b_hat
+
+    return rho_hat
+
+
 def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
     """
     MaPS Estimator: Implements Algorithm 1 from the paper.
@@ -61,6 +90,11 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
     X_hat_locals = []
     rho_hats = np.zeros((3, M))
 
+    # x_param_model = np.zeros((3, 5))
+    # x_param_model[0] = np.array([ 0.01206158, -0.00241387,  0.01717927, -0.01187707, -0.00175727])
+    # x_param_model[1] = np.array([ 0.00529192, -0.01727021, -0.0080813 ,  0.00441649,  0.00795592])
+    # x_param_model[2] = np.array([-0.00392657,  0.01215939, -0.00277445,  0.01434511, -0.00578513])
+    
     for i in range(M):
         B_meas = B_meas_cell[i]
 
@@ -80,13 +114,16 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
 
         h_vec = B_delta.flatten(order='F')  # Column-major (Fortran) order to match MATLAB
         x_param = C_pinv @ h_vec
+        # x_param = x_param_model[i, :].T  # Use pre-trained model parameters for testing
         X_hat = S_mat @ x_param
         X_hat = X_hat.reshape((3, 3), order='F')  # Fortran order for column-major
         X_hat_locals.append(X_hat)
 
         # (Eq. 13) Local relative displacement estimation
-        rho_hats[:, i] = -3 * np.linalg.solve(X_hat, b_hat_locals[:, i])
-
+        # Original: 
+        # rho_hats[:, i] = -3 * np.linalg.solve(X_hat, b_hat_locals[:, i])
+        # Eigenvalue-based method to avoid matrix inversion:
+        rho_hats[:, i] = compute_rho_hat_eigen(X_hat, b_hat_locals[:, i])
     # Global Pose Recovery
     # (Eq. 14-17) Orientation Recovery via Kabsch Algorithm
     U_P = []

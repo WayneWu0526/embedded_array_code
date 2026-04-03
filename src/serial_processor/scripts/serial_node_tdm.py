@@ -101,7 +101,7 @@ class SerialNodeTDM:
         try:
             # Pack 13-byte command: Header(2) + Version(1) + Mode(1) + Bitmap(2) + SettlingTime(2) + CycleTime(4) + CycleNum(1)
             # STM32 uses big-endian
-            # Mode: 0x01=CVT, 0x02=CCI
+            # Mode: 0x00=MANUAL, 0x01=CVT, 0x02=CCI
             # Bitmap: bit0=sensor1, bit11=sensor12
             # SettlingTime: 0.01ms units
             # CycleTime: 0.01ms units, max 10000.00ms

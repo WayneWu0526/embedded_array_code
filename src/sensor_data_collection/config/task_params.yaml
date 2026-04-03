@@ -1,11 +1,21 @@
 # 通用任务参数
-mode: "CVT"              # 当前模式: CVT 或 CCI (切换模式时修改此处即可)
-num_cycles: 30
+mode: "CVT"              # CVT 或 CCI
+manual_trigger: false   # true=手动模式，false=自动模式
+num_cycles: 10
 
 # Slot -> TF frame 映射
 # key 为 slot 编号（字符串），value 为 frame 名称，"null" 表示该 slot 无 pose
 slot_frame_mapping:
   "0": "diana7_em_tcp_filt"
+  "1": "arm2_em_tcp_filt"
+  "2": "arm1_em_tcp_filt"
+  "3": "null"
+
+# 手动模式专用参数（manual_trigger=true 时使用）
+num_positions: 3              # 定位所需的最小位置数（CVT=4, CCI=3，可覆盖）
+num_frames_to_average: 10    # 每个位置采集的帧数做平均
+# 手动模式各 slot 的 TF frame 来源，与 slot_frame_mapping 格式相同
+manual_slot_frame_mapping:
+  "0": "diana7_em_tcp_filt"
   "1": "arm1_em_tcp_filt"
   "2": "arm2_em_tcp_filt"
-  "3": "null"

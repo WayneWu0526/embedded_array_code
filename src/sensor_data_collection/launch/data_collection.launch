@@ -3,6 +3,7 @@
 
   <!-- Arguments -->
   <arg name="mode" default="CVT"/>
+  <arg name="manual_trigger" default="false"/>
   <arg name="sensor_float_endian" default="little"/>
 
   <!-- ===================== -->
@@ -20,9 +21,9 @@
   </node>
 
   <!-- ===================== -->
-  <!-- 3. Signal Generator (FY8300) -->
+  <!-- 3. Signal Generator (FY8300) - Auto mode only -->
   <!-- ===================== -->
-  <node name="fy8300" pkg="signal_generator" type="fy8300_node" output="screen">
+  <node if="$(eval not arg('manual_trigger'))" name="fy8300" pkg="signal_generator" type="fy8300_node" output="screen">
     <!-- 根据 mode 加载参数到节点私有空间 -->
     <rosparam if="$(eval mode == 'CVT')" command="load"
               file="$(find sensor_data_collection)/config/signal_params_cvt.yaml"/>
@@ -43,6 +44,10 @@
               file="$(find sensor_data_collection)/config/params_cvt.yaml"/>
     <rosparam if="$(eval mode == 'CCI')" command="load"
               file="$(find sensor_data_collection)/config/params_cci.yaml"/>
+
+    <!-- 显式传递 launch 参数 -->
+    <param name="mode" value="$(arg mode)"/>
+    <param name="manual_trigger" value="$(arg manual_trigger)"/>
   </node>
 
   <!-- ===================== -->
