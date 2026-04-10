@@ -16,7 +16,7 @@ import struct
 import threading
 import math
 import glob
-from std_msgs.msg import Header
+from std_msgs.msg import Header, Float32MultiArray
 from serial_processor.msg import SensorData, StmUplink, StmDownlink
 
 
@@ -26,7 +26,7 @@ class SerialNodeTDM:
     TERMINATOR = b'\r\n'
     UPLINK_MIN_SIZE = 17  # Header(2) + Version(1) + cycle_id(2) + slot(1) + Bitmap(2) + Timestamp(8) + cycle_end(1)
     SENSOR_DATA_SIZE = 7  # SensorID(1) + X(2) + Y(2) + Z(2)
-    SCALE_FACTOR = 32.0 / 32768.0  # STM32 sends 16-bit signed int, scale to actual value
+    SCALE_FACTOR = 32.0 / 32768.0 / 4.0  # STM32 sends 16-bit signed int, scale to actual value (TEMP: div4 for testing)
 
     def __init__(self):
         rospy.init_node('serial_node_tdm', anonymous=True)
@@ -45,6 +45,8 @@ class SerialNodeTDM:
 
         # Publisher for uplink data
         self.pub = rospy.Publisher('stm_uplink', StmUplink, queue_size=100)
+        # Publisher for magnetic field magnitude of each sensor
+        self.pub_magnitude = rospy.Publisher('stm_magnitude', Float32MultiArray, queue_size=100)
 
         # Subscriber for downlink commands
         self.sub = rospy.Subscriber('stm_downlink', StmDownlink, self._downlink_callback)
@@ -126,7 +128,6 @@ class SerialNodeTDM:
             # rospy.sleep(0.1)
 
             reply = self.ser.read(3)
-            rospy.loginfo(f"Initialization reply: {reply.hex()}")
             if len(reply) == 3 and reply[0:2] == b'\xAA\x55':
                 status = reply[2]
                 if status == 0:
@@ -172,8 +173,8 @@ class SerialNodeTDM:
 
             sensors = []
             sensor_count = sensor_payload_len // self.SENSOR_DATA_SIZE
-            rospy.loginfo(f"Parsing uplink: cycle_id={cycle_id}, slot={slot}, bitmap=0x{bitmap:04X}, "
-                          f"timestamp={timestamp}, sensor_count={sensor_count}")
+            rospy.logdebug(f"Parsing uplink: cycle_id={cycle_id}, slot={slot}, bitmap=0x{bitmap:04X}, "
+                           f"timestamp={timestamp}, sensor_count={sensor_count}")
             offset = 16
             for _ in range(sensor_count):
                 # sensor_data format: SensorID(1 byte) + X(2 bytes) + Y(2 bytes) + Z(2 bytes), signed int16
@@ -249,8 +250,12 @@ class SerialNodeTDM:
                         msg = self._parse_uplink(frame)
                         if msg is not None:
                             self.pub.publish(msg)
+                            # Publish magnetic field magnitude for each sensor
+                            magnitudes = Float32MultiArray()
+                            magnitudes.data = [math.sqrt(s.x**2 + s.y**2 + s.z**2) for s in msg.sensor_data]
+                            self.pub_magnitude.publish(magnitudes)
                         else:
-                            rospy.logwarn(f"Dropping invalid uplink frame: {frame.hex()}")
+                            rospy.logwarn(f"Dropping invalid uplink frame (len={len(frame)}): {frame[:16].hex()}...")
 
                         buffer = buffer[end_idx + len(self.TERMINATOR):]
                 else:

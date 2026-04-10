@@ -1,0 +1,20 @@
+<launch>
+  <!-- STM32 Manual Mode Launch File -->
+  <!-- 仅启动STM32下位机，手动操作模式 -->
+
+  <!-- Arguments -->
+  <arg name="port" default="/dev/ttyACM"/>
+  <arg name="baudrate" default="921600"/>
+  <arg name="sensor_float_endian" default="little"/>
+
+  <!-- Hall Sensor Serial Node (TDM Binary Protocol) - Manual Mode -->
+  <node name="serial_node_tdm" pkg="serial_processor" type="serial_node_tdm.py" output="screen">
+    <param name="port" value="$(arg port)"/>
+    <param name="baudrate" value="$(arg baudrate)"/>
+    <param name="sensor_float_endian" value="$(arg sensor_float_endian)"/>
+  </node>
+
+  <!-- Auto-send manual mode initialization command -->
+  <node name="stm32_init" pkg="serial_processor" type="stm32_init.py" output="screen"/>
+
+</launch>

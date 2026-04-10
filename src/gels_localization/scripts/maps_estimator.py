@@ -89,11 +89,6 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
     b_hat_locals = np.zeros((3, M))
     X_hat_locals = []
     rho_hats = np.zeros((3, M))
-
-    # x_param_model = np.zeros((3, 5))
-    # x_param_model[0] = np.array([ 0.01206158, -0.00241387,  0.01717927, -0.01187707, -0.00175727])
-    # x_param_model[1] = np.array([ 0.00529192, -0.01727021, -0.0080813 ,  0.00441649,  0.00795592])
-    # x_param_model[2] = np.array([-0.00392657,  0.01215939, -0.00277445,  0.01434511, -0.00578513])
     
     for i in range(M):
         B_meas = B_meas_cell[i]
@@ -114,7 +109,6 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
 
         h_vec = B_delta.flatten(order='F')  # Column-major (Fortran) order to match MATLAB
         x_param = C_pinv @ h_vec
-        # x_param = x_param_model[i, :].T  # Use pre-trained model parameters for testing
         X_hat = S_mat @ x_param
         X_hat = X_hat.reshape((3, 3), order='F')  # Fortran order for column-major
         X_hat_locals.append(X_hat)

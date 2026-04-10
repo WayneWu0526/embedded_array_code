@@ -276,7 +276,7 @@ def generate_synthetic_request_from_json(json_path, cycle_id=None, mode_override
     slot_data_list = []
 
     # Moment magnitudes
-    moment_magnitude = np.array([-450, -500, -1000])
+    moment_magnitude = np.array([-150, -120, -250])
 
     for slot_idx in [0, 1, 2]:
         if slot_idx not in slot_dict:

@@ -65,6 +65,15 @@ def process_file(json_path, show_plot=False, run_sensitivity=False, sensor_ids=N
 
     # Load real data request
     req = json_to_request(json_path)
+
+    # Apply calibration correction: /32 * 8 = /4
+    # Real sensor data has a calibration error that needs to be corrected
+    for slot in req.slot_data:
+        for sensor in slot.sensor_data:
+            sensor.x = sensor.x / 32.0 * 8.0
+            sensor.y = sensor.y / 32.0 * 8.0
+            sensor.z = sensor.z / 32.0 * 8.0
+
     print(f"Cycle ID: {req.cycle_id}, Mode: {req.mode}")
     print(f"Sensors: {req.sensor_ids}")
     print(f"Slots: {[s.slot for s in req.slot_data]}")
@@ -92,6 +101,10 @@ def process_file(json_path, show_plot=False, run_sensitivity=False, sensor_ids=N
     model_success = False
     try:
         model_req, sources, p_array, R_array = generate_synthetic_request_from_json(json_path, cycle_id=req.cycle_id)
+
+        # Note: Mock data does NOT need calibration correction - it's already in correct units
+        # The generate_hall_data_from_dipole function outputs correct Gs values
+
         print(f"Model Request: cycle_id={model_req.cycle_id}, mode={model_req.mode}")
         print(f"Sensors: {model_req.sensor_ids}")
 

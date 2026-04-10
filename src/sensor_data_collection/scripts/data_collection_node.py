@@ -203,12 +203,20 @@ class DataCollector:
         self.current_cycle = None
         self.completed_cycles = 0
 
+        # Shutdown handling
+        self._shutdown_requested = threading.Event()
+        rospy.on_shutdown(self._on_shutdown)
+
         # TF listener
         self.tf_buffer = None
         self._init_tf()
 
         # Publishers
         self.pub_stm_downlink = rospy.Publisher('stm_downlink', StmDownlink, queue_size=10)
+
+        # Manual mode: publish sensor data for external monitoring
+        if self.manual_trigger:
+            self.pub_hall_data = rospy.Publisher('~hall_data', StmUplink, queue_size=10)
 
         # FY8300 signal generator output control (only for auto mode)
         if not self.manual_trigger:
@@ -280,10 +288,19 @@ class DataCollector:
             self.tf_buffer = Buffer()
             self.tf_listener = TransformListener(self.tf_buffer)
 
-            # Wait for required TF frames to be published
-            required_frames = ['diana7_em_tcp_filt', 'arm1_em_tcp_filt',
-                               'arm2_em_tcp_filt', 'sensor_array_filt']
-            rospy.loginfo("Waiting for TF frames to become available...")
+            # Determine which frames to wait for based on mode
+            if self.manual_trigger:
+                # Manual mode: only wait for frames that are actually used
+                required_frames = set(self.manual_slot_frame_map.values())
+                required_frames.discard(None)  # Remove null entries
+                required_frames.add('sensor_array_filt')  # Always need ground truth
+            else:
+                # Auto mode: wait for all frames
+                required_frames = ['diana7_em_tcp_filt', 'arm1_em_tcp_filt',
+                                   'arm2_em_tcp_filt', 'sensor_array_filt']
+
+            required_frames = list(required_frames)
+            rospy.loginfo(f"Waiting for TF frames: {required_frames}...")
             for frame in required_frames:
                 timeout = 60.0  # max 60s per frame
                 rate = rospy.Rate(10)
@@ -309,7 +326,7 @@ class DataCollector:
         msg.mode = int(self.stm_mode)
         msg.bitmap = self.bitmap
         if self.manual_trigger:
-            # Manual mode: continuous data, no timing
+            # Manual mode: continuous data, timing params set to 0
             msg.settling_time = 0
             msg.cycle_time = 0
             msg.cycle_num = 0
@@ -343,6 +360,30 @@ class DataCollector:
             return
         self._publish_fy8300_frequency(0.0)
         self._set_fy8300_output_enabled(False)
+
+    def _on_shutdown(self):
+        """Handle node shutdown gracefully."""
+        rospy.loginfo("Shutdown initiated...")
+        self._shutdown_requested.set()
+
+        # Shutdown FY8300 if in auto mode
+        if not self.manual_trigger:
+            self._shutdown_fy8300()
+
+        # Wait for keyboard thread to finish (with timeout)
+        if hasattr(self, 'keyboard_thread') and self.keyboard_thread.is_alive():
+            rospy.loginfo("Waiting for keyboard thread to finish...")
+            self.keyboard_thread.join(timeout=2.0)
+            if self.keyboard_thread.is_alive():
+                rospy.logwarn("Keyboard thread did not finish in time")
+
+        # Save any pending data
+        if hasattr(self, 'slot_buffers') and self.slot_buffers:
+            for i, buf in enumerate(self.slot_buffers):
+                if buf and len(buf) > 0 and i not in self.collected_positions:
+                    rospy.logwarn(f"Slot {i} has unsaved data ({len(buf)} frames)")
+
+        rospy.loginfo("Shutdown complete")
 
     # ========== Manual Mode Methods ==========
 
@@ -379,32 +420,57 @@ class DataCollector:
     def _keyboard_loop(self):
         """Listen for Enter key presses in separate thread, print status"""
         import sys
-        if sys.platform == 'linux':
-            import tty
-            import termios
-            old_settings = termios.tcgetattr(sys.stdin)
+        import tty
+        import termios
+
+        rospy.loginfo("\n========================================")
+        rospy.loginfo("  MANUAL TRIGGER MODE - 手动采集模式")
+        rospy.loginfo("  Press ENTER to save each position")
+        rospy.loginfo("  按 Enter 键保存每个位置")
+        rospy.loginfo("  Press 'q' to quit immediately")
+        rospy.loginfo("  按 q 立即退出")
+        rospy.loginfo("  Press Ctrl+C to exit")
+        rospy.loginfo("========================================\n")
+
+        old_settings = None
+        is_tty = sys.stdin.isatty() if hasattr(sys.stdin, 'isatty') else False
+
+        if sys.platform == 'linux' and is_tty:
             try:
+                old_settings = termios.tcgetattr(sys.stdin)
                 tty.setraw(sys.stdin.fileno())
-                while not rospy.is_shutdown():
-                    self._print_status()
-                    ch = sys.stdin.read(1)
-                    if ch == '\r' or ch == '\n':  # Enter key
-                        rospy.sleep(0.1)
-                        self._on_enter()
-            finally:
-                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
-        else:
-            while not rospy.is_shutdown():
+            except termios.error:
+                is_tty = False
+
+        try:
+            while not self._shutdown_requested.is_set():
                 self._print_status()
-                input("Press Enter to save position...")
-                self._on_enter()
-                rospy.sleep(0.5)
+                if sys.platform == 'linux' and is_tty:
+                    try:
+                        ch = sys.stdin.read(1)
+                        if ch in ('q', 'Q'):
+                            rospy.loginfo("[MANUAL] Quit requested by keyboard input 'q'.")
+                            self._shutdown_requested.set()
+                            rospy.signal_shutdown("Manual quit requested")
+                            break
+                        if ch == '\r' or ch == '\n':  # Enter key
+                            rospy.sleep(0.1)
+                            self._on_enter()
+                    except (IOError, OSError):
+                        break
+                else:
+                    rospy.sleep(0.5)
+        finally:
+            # Restore terminal settings
+            if old_settings is not None:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+            rospy.loginfo("[MANUAL] Keyboard listener stopped.")
 
     def _print_status(self):
         """Print current status to stdout"""
         active_slot = self._get_active_slot()
         if active_slot is None:
-            print("\r[MANUAL] All positions collected, waiting for localization...   ")
+            rospy.loginfo("[MANUAL] All positions collected, waiting for localization...")
         else:
             frames = len(self.slot_buffers[active_slot])
             buf = self.slot_buffers[active_slot]
@@ -412,26 +478,26 @@ class DataCollector:
                 latest = buf[-1]['sensor_data']
                 if latest:
                     s = latest[0]
-                    print(f"\r[MANUAL] Slot:{active_slot} Frames:{frames}/{self.num_frames_to_average} "
-                          f"Sensors: latest(id={s.id}, x={s.x:.4f}, y={s.y:.4f}, z={s.z:.4f}) "
-                          f"Collected:{self.collected_positions}   ", end='', flush=True)
+                    rospy.logdebug(f"[MANUAL] Slot:{active_slot} Frames:{frames}/{self.num_frames_to_average} "
+                                   f"Sensors: latest(id={s.id}, x={s.x:.4f}, y={s.y:.4f}, z={s.z:.4f}) "
+                                   f"Collected:{self.collected_positions}")
                 else:
-                    print(f"\r[MANUAL] Slot:{active_slot} Frames:{frames}/{self.num_frames_to_average} "
-                          f"Collected:{self.collected_positions}   ", end='', flush=True)
+                    rospy.logdebug(f"[MANUAL] Slot:{active_slot} Frames:{frames}/{self.num_frames_to_average} "
+                                   f"Collected:{self.collected_positions}")
             else:
-                print(f"\r[MANUAL] Slot:{active_slot} Frames:0/{self.num_frames_to_average} "
-                      f"Collected:{self.collected_positions}   ", end='', flush=True)
+                rospy.logdebug(f"[MANUAL] Slot:{active_slot} Frames:0/{self.num_frames_to_average} "
+                               f"Collected:{self.collected_positions}")
 
     def _on_enter(self):
         """Handle Enter key press: save current position data"""
         active_slot = self._get_active_slot()
         if active_slot is None:
-            print("\r[MANUAL] All positions already collected!   ")
+            rospy.logwarn("[MANUAL] All positions already collected!")
             return
 
         buffer = self.slot_buffers[active_slot]
         if len(buffer) < self.num_frames_to_average:
-            print(f"\r[MANUAL] Not enough frames: {len(buffer)}/{self.num_frames_to_average}")
+            rospy.logwarn(f"[MANUAL] Not enough frames: {len(buffer)}/{self.num_frames_to_average}")
             return
 
         # Average the sensor data
@@ -454,21 +520,20 @@ class DataCollector:
         self.collected_positions.append(active_slot)
 
         remaining = self.num_positions - len(self.collected_positions)
-        print(f"\r[MANUAL] Slot {active_slot} saved! {remaining} positions remaining.   ")
-        if remaining > 0:
-            rospy.loginfo(f"Slot {active_slot} saved. Need {remaining} more positions.")
-        else:
-            rospy.loginfo("All positions collected, calling localization service...")
+        rospy.loginfo(f"[MANUAL] Slot {active_slot} saved! {remaining} positions remaining.")
+        if remaining == 0:
             self._finalize_cycle_manual()
 
     def _finalize_cycle_manual(self):
         """Process completed manual cycle: call localization service and save to JSON"""
-        print(f"\r[MANUAL] All positions collected! Calling localization service...   ")
+        rospy.loginfo("[MANUAL] All positions collected! Calling localization service...")
 
         # Determine mode string for JSON
         mode_str = 'CVT' if self.mode == MODE_CVT else 'CCI'
 
         # Build cycle data dict
+        # Get true sensor_array_filt pose as ground truth (not slot[0].pose)
+        ground_truth_pose = self._lookup_pose('sensor_array_filt') if self.cycle_slot_data else None
         cycle_data = {
             'header': {
                 'cycle_id': self.cycle_id,
@@ -479,7 +544,7 @@ class DataCollector:
             },
             'pc_timestamp': rospy.Time.now().to_sec(),
             'slot_data': self.cycle_slot_data,
-            'ground_truth_pose': self.cycle_slot_data[0]['pose'] if self.cycle_slot_data else None,
+            'ground_truth_pose': ground_truth_pose,
         }
         cycle_data = self._sanitize_json_value(cycle_data)
 
@@ -527,6 +592,7 @@ class DataCollector:
         # Check if all cycles are done
         if self.completed_cycles >= self.num_cycles:
             rospy.loginfo("All cycles completed, shutting down")
+            self._shutdown_requested.set()
             rospy.signal_shutdown('Data collection complete')
             return
 
@@ -535,7 +601,7 @@ class DataCollector:
         self.cycle_slot_data = []
         self.collected_positions = []
         self.slot_buffers = [deque(maxlen=self.num_frames_to_average) for _ in range(self.num_positions)]
-        print(f"[MANUAL] Cycle saved! Ready for next round.")
+        rospy.loginfo("[MANUAL] Cycle saved! Ready for next round.")
 
     def _lookup_pose(self, frame):
         """Look up transform from lab_table to frame"""
@@ -573,6 +639,8 @@ class DataCollector:
                 'sensor_data': msg.sensor_data,
                 'bitmap': msg.bitmap
             })
+            # Publish for external monitoring (rostopic echo /data_collection_node/hall_data)
+            self.pub_hall_data.publish(msg)
             return
 
         # Auto mode: FY8300 triggered, slot-based data
@@ -740,7 +808,13 @@ class DataCollector:
 def main():
     rospy.init_node('data_collection_node')
     collector = DataCollector()
-    rospy.spin()
+    try:
+        rospy.spin()
+    except KeyboardInterrupt:
+        rospy.loginfo("Keyboard interrupt received")
+    finally:
+        collector._shutdown_requested.set()
+        collector._on_shutdown()
 
 
 if __name__ == '__main__':
