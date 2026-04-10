@@ -39,6 +39,7 @@ from offline_utils import (
     compare_model_vs_estimate,
     mock_request_to_json,
     sensitivity_analysis_x_hat_noise,
+    print_magnetic_field_table,
 )
 from offline_plot import plot_poses_comparison
 
@@ -46,7 +47,7 @@ from offline_plot import plot_poses_comparison
 from localization_service_node import handle_localize_cycle, load_configuration
 
 
-def process_file(json_path, show_plot=False, run_sensitivity=False, sensor_ids=None):
+def process_file(json_path, show_plot=False, run_sensitivity=False, sensor_ids=None, save_mock=False):
     """
     Process a single cycle JSON file: run both real data and model data localization.
 
@@ -56,24 +57,16 @@ def process_file(json_path, show_plot=False, run_sensitivity=False, sensor_ids=N
         run_sensitivity: if True, run x_hat noise sensitivity analysis
         sensor_ids: list of sensor IDs to use (e.g. [1,3,4,6,7,9,10,12]).
                      None means use all sensors from JSON.
+        save_mock: if True, save mock data to JSON file alongside the input
 
     Returns:
-        tuple: (real_success: bool, req, resp, model_resp)
+        tuple: (real_success: bool, req, resp, model_req, model_resp)
     """
     print(f"\n{'='*60}")
     print(f"Processing: {json_path}")
 
     # Load real data request
     req = json_to_request(json_path)
-
-    # Apply calibration correction: /32 * 8 = /4
-    # Real sensor data has a calibration error that needs to be corrected
-    for slot in req.slot_data:
-        for sensor in slot.sensor_data:
-            sensor.x = sensor.x / 32.0 * 8.0
-            sensor.y = sensor.y / 32.0 * 8.0
-            sensor.z = sensor.z / 32.0 * 8.0
-
     print(f"Cycle ID: {req.cycle_id}, Mode: {req.mode}")
     print(f"Sensors: {req.sensor_ids}")
     print(f"Slots: {[s.slot for s in req.slot_data]}")
@@ -108,6 +101,13 @@ def process_file(json_path, show_plot=False, run_sensitivity=False, sensor_ids=N
         print(f"Model Request: cycle_id={model_req.cycle_id}, mode={model_req.mode}")
         print(f"Sensors: {model_req.sensor_ids}")
 
+        # Save mock data if requested
+        if save_mock:
+            mock_output_dir = os.path.dirname(os.path.abspath(json_path))
+            mock_path = os.path.join(mock_output_dir, f'cycle_{req.cycle_id:04d}_mock.json')
+            mock_request_to_json(model_req, mock_path)
+            print(f"Mock data saved to: {mock_path}")
+
         model_resp = handle_localize_cycle(model_req)
 
         if model_resp.success:
@@ -132,8 +132,8 @@ def process_file(json_path, show_plot=False, run_sensitivity=False, sensor_ids=N
             output_dir = os.path.dirname(os.path.abspath(json_path))
             bmeas_plot_path = os.path.join(output_dir, f'b_meas_comparison_cycle_{req.cycle_id:04d}.png')
 
-            print("\n=== Mock vs Real Comparison ===")
-            compare_model_vs_estimate(B_meas_cell, mock_B_meas_cell, meas_details, mock_details, output_path=bmeas_plot_path)
+            # print("\n=== Mock vs Real Comparison ===")
+            # compare_model_vs_estimate(B_meas_cell, mock_B_meas_cell, meas_details, mock_details, output_path=bmeas_plot_path)
 
             # Run sensitivity analysis if requested
             if run_sensitivity:
@@ -163,7 +163,7 @@ def process_file(json_path, show_plot=False, run_sensitivity=False, sensor_ids=N
         import traceback
         traceback.print_exc()
 
-    return (real_success, req, resp, model_resp)
+    return (real_success, req, resp, model_req, model_resp)
 
 
 def main():
@@ -180,6 +180,8 @@ def main():
                        help='Run x_hat noise sensitivity analysis')
     parser.add_argument('--sensors', type=str, default=None,
                        help='Comma-separated sensor IDs to use (e.g., "1,3,4,6,7,9,10,12"). Default: all 12 sensors')
+    parser.add_argument('--field-table', action='store_true',
+                       help='Print magnetic field comparison table (real vs mock) in Gs')
 
     args = parser.parse_args()
 
@@ -203,25 +205,23 @@ def main():
 
     if os.path.isfile(path):
         # Parse sensor IDs if provided
-        sensor_ids = None
+        sensor_ids = None  # Default sensor IDs
         if args.sensors is not None:
             sensor_ids = [int(x.strip()) for x in args.sensors.split(',')]
             print(f"Using sensors: {sensor_ids}")
 
         # Single file
         show_plot = args.plot
-        success, req, resp, model_resp = process_file(path, show_plot=show_plot, run_sensitivity=args.sensitivity, sensor_ids=sensor_ids)
+        success, req, resp, model_req, model_resp = process_file(
+            path, show_plot=show_plot, run_sensitivity=args.sensitivity,
+            sensor_ids=sensor_ids, save_mock=args.save_mock
+        )
         if show_plot and success:
             output_path = plot_poses_comparison(req, resp, json_path=path, model_resp=model_resp)
             print(f"Plot saved to: {output_path}")
 
-        # Save mock data if requested
-        if args.save_mock:
-            model_req, _, _, _ = generate_synthetic_request_from_json(path, cycle_id=req.cycle_id)
-            output_dir = os.path.dirname(os.path.abspath(path))
-            mock_path = os.path.join(output_dir, f'cycle_{req.cycle_id:04d}_mock.json')
-            mock_request_to_json(model_req, mock_path)
-            print(f"Mock data saved to: {mock_path}")
+        if args.field_table and model_req is not None:
+            print_magnetic_field_table(req, model_req=model_req)
 
         if sys.stdin.isatty():
             input("Press Enter to exit...")
@@ -239,7 +239,9 @@ def main():
         real_success_count = 0
         model_success_count = 0
         for f in files:
-            success, _, _, model_resp = process_file(f, show_plot=False)
+            success, req, _, _, model_resp = process_file(
+                f, show_plot=False, sensor_ids=sensor_ids, save_mock=args.save_mock
+            )
             if success:
                 real_success_count += 1
             if model_resp is not None:

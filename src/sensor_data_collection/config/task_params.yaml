@@ -1,6 +1,6 @@
 # 通用任务参数
 mode: "CVT"              # CVT 或 CCI
-manual_trigger: false   # true=手动模式，false=自动模式
+manual_trigger: true   # true=手动模式，false=自动模式
 num_cycles: 10
 
 # Slot -> TF frame 映射
@@ -17,5 +17,5 @@ num_frames_to_average: 5    # 每个位置采集的帧数做平均
 # 手动模式各 slot 的 TF frame 来源，与 slot_frame_mapping 格式相同
 manual_slot_frame_mapping:
   "0": "diana7_em_tcp_filt"
-  "1": "diana7_em_tcp_filt"
-  "2": "diana7_em_tcp_filt"
+  "1": "arm2_em_tcp_filt"
+  "2": "arm1_em_tcp_filt"

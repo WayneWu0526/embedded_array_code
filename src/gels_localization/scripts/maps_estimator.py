@@ -83,7 +83,6 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
     ])
 
     C_mat = np.kron(D_delta.T, np.eye(3)) @ S_mat
-    C_pinv = np.linalg.pinv(C_mat)
 
     # Local Quantity Estimation
     b_hat_locals = np.zeros((3, M))
@@ -108,8 +107,10 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
                 idx += 1
 
         h_vec = B_delta.flatten(order='F')  # Column-major (Fortran) order to match MATLAB
-        x_param = C_pinv @ h_vec
-        X_hat = S_mat @ x_param
+        C_pinv = np.linalg.pinv(C_mat)
+        # x_param = np.linalg.lstsq(C_mat, h_vec, rcond=None)[0]  # Solve for X parameters
+        x_param = C_pinv @ h_vec  # More stable than lstsq for potentially rank-deficient C_mat
+        X_hat = S_mat @ x_param  # Reconstruct X from parameters
         X_hat = X_hat.reshape((3, 3), order='F')  # Fortran order for column-major
         X_hat_locals.append(X_hat)
 

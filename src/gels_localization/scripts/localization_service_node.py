@@ -124,13 +124,6 @@ def load_configuration(yaml_path=None):
         3: np.array(r_corr_r3).reshape(3, 3, order='F'),
         4: np.array(r_corr_r4).reshape(3, 3, order='F'),
     }
-    # R_CORR = {
-    #     1: np.array(r_corr_r1).reshape(3, 3),
-    #     2: np.array(r_corr_r2).reshape(3, 3),
-    #     3: np.array(r_corr_r3).reshape(3, 3),
-    #     4: np.array(r_corr_r4).reshape(3, 3),
-    # }        
-
 
 def get_sensor_group(sensor_id):
     """Get rotation correction group for sensor id (1-indexed)"""

@@ -67,7 +67,7 @@ def generate_hall_data_from_dipole(sensor_ids, p_sensor_array, R_sensor_array, d
         p_sensor_global = p_sensor_array + R_sensor_array @ d_j
 
         # Compute magnetic field at sensor using dipole model (in global frame, Tesla)
-        b_global, _ = mag_dipole_model(p_sensor_global, m_Ci, source_p_Ci, order=1)
+        b_global, _ = mag_dipole_model(p_sensor_global, m_Ci, source_p_Ci, order=3)
 
         # Transform from global to sensor array frame: b_array = R.T @ b_global
         b_array = R_sensor_array.T @ b_global
@@ -242,7 +242,7 @@ def generate_synthetic_request_from_json(json_path, cycle_id=None, mode_override
         tuple: (MockLocalizeCycleRequest, sources, p_sensor_array, R_sensor_array)
     """
     import json
-    from localization_service_node import R_CORR
+    from localization_service_node import R_CORR, D_LIST
     from offline_mock import MockPose, MockSlotData, MockLocalizeCycleRequest
 
     with open(json_path) as f:
@@ -261,22 +261,13 @@ def generate_synthetic_request_from_json(json_path, cycle_id=None, mode_override
         gt['rotation']['z'], gt['rotation']['w']
     )
 
-    # Sensor positions relative to array center
-    de1, de2, de3 = 1.0e-3, 2.0e-3, 2.1e-3
-    d_list = np.array([
-        [-de2/2,  de3/2, -de1], [-de2/2,  de3/2,  0   ], [-de2/2,  de3/2,  de1 ],
-        [-de2/2, -de3/2, -de1], [-de2/2, -de3/2,  0   ], [-de2/2, -de3/2,  de1 ],
-        [ de2/2,  de3/2, -de1], [ de2/2,  de3/2,  0   ], [ de2/2,  de3/2,  de1 ],
-        [ de2/2, -de3/2, -de1], [ de2/2, -de3/2,  0   ], [ de2/2, -de3/2,  de1 ],
-    ])
-
     # Build slot_data from JSON
     slot_dict = {sd['slot']: sd for sd in data['slot_data']}
     sources = []
     slot_data_list = []
 
     # Moment magnitudes
-    moment_magnitude = np.array([-150, -120, -250])
+    moment_magnitude = np.array([-120, -400, -300])
 
     for slot_idx in [0, 1, 2]:
         if slot_idx not in slot_dict:
@@ -296,7 +287,7 @@ def generate_synthetic_request_from_json(json_path, cycle_id=None, mode_override
 
         # Generate synthetic sensor data
         sensor_readings = generate_hall_data_from_dipole(
-            sensor_ids, p_sensor_array, R_sensor_array, d_list, p_Ci, m_Ci, R_CORR
+            sensor_ids, p_sensor_array, R_sensor_array, D_LIST, p_Ci, m_Ci, R_CORR
         )
 
         pose = MockPose(
@@ -313,7 +304,7 @@ def generate_synthetic_request_from_json(json_path, cycle_id=None, mode_override
     # B0 (slot 3) for CVT - background only
     if mode == 'CVT' and 3 in slot_dict:
         b0_data = generate_hall_data_from_dipole(
-            sensor_ids, p_sensor_array, R_sensor_array, d_list,
+            sensor_ids, p_sensor_array, R_sensor_array, D_LIST,
             np.array([0.0, 0.0, 0.0]),
             np.array([0.0, 0.0, 0.0]),
             R_CORR
@@ -850,3 +841,165 @@ def sensitivity_analysis_x_hat_noise(D_cal, sources, B_meas_cell,
     plt.close()
 
     return results
+
+
+def print_magnetic_field_table(req, model_req=None, output_csv=None):
+    """
+    Print a comparison table of processed magnetic field values (Bx, By, Bz, |B|) in Gs
+    for each sensor in each slot, after applying R_CORR correction.
+
+    For CVT mode (which has B0 slot 3), shows B_meas - B0 (background subtraction).
+    For non-CVT mode, shows raw B_meas.
+
+    Shows real vs mock side-by-side when model_req is provided.
+
+    Args:
+        req: MockLocalizeCycleRequest (real data)
+        model_req: MockLocalizeCycleRequest (synthetic data, optional)
+        output_csv: if provided, save to CSV file
+
+    Prints:
+        Formatted table with columns: Slot, Sensor, Bx, By, Bz, |B| for real [and mock]
+    """
+    from localization_service_node import process_hall_data, GS_TO_TESLA
+
+    TESLA_TO_GS = 1.0 / GS_TO_TESLA  # Convert back to Gs for display
+    slot_names = {0: 'diana7', 1: 'arm1', 2: 'arm2', 3: 'B0'}
+    mode = req.mode
+    is_cvt = (mode == 'CVT')
+
+    def process_slot(slot):
+        """Return dict {sensor_id: {Bx, By, Bz, B_mag}} in Gs."""
+        B_meas_T = process_hall_data(slot.sensor_data)  # 3 x N, in Tesla
+        result = {}
+        for i, reading in enumerate(slot.sensor_data):
+            B_vec_Gs = B_meas_T[:, i] * TESLA_TO_GS
+            result[reading.id] = {
+                'Bx': B_vec_Gs[0],
+                'By': B_vec_Gs[1],
+                'Bz': B_vec_Gs[2],
+                'B_mag': np.linalg.norm(B_vec_Gs)
+            }
+        return result
+
+    # Build slot lookup
+    real_slot_dict = {slot.slot: slot for slot in req.slot_data}
+    real_data = {slot.slot: process_slot(slot) for slot in req.slot_data}
+
+    mock_slot_dict = {slot.slot: slot for slot in model_req.slot_data} if model_req else {}
+    mock_data = {slot.slot: process_slot(slot) for slot in model_req.slot_data} if model_req else {}
+
+    # Compute B0 (background) for CVT mode
+    B0_real = None
+    B0_mock = None
+    if is_cvt and 3 in real_slot_dict:
+        B0_real = process_slot(real_slot_dict[3])
+    if is_cvt and model_req and 3 in mock_slot_dict:
+        B0_mock = process_slot(mock_slot_dict[3])
+
+    # Apply background subtraction
+    def subtract_B0(slot_data, B0):
+        """Subtract B0 from each sensor's reading in slot_data."""
+        if B0 is None:
+            return slot_data
+        result = {}
+        for sid, vals in slot_data.items():
+            b0_vals = B0.get(sid, {'Bx': 0, 'By': 0, 'Bz': 0, 'B_mag': 0})
+            diff_Bx = vals['Bx'] - b0_vals['Bx']
+            diff_By = vals['By'] - b0_vals['By']
+            diff_Bz = vals['Bz'] - b0_vals['Bz']
+            diff_mag = np.sqrt(diff_Bx**2 + diff_By**2 + diff_Bz**2)
+            result[sid] = {
+                'Bx': diff_Bx, 'By': diff_By, 'Bz': diff_Bz, 'B_mag': diff_mag
+            }
+        return result
+
+    # Prepare display data (skip slot 3 B0 itself)
+    display_slots = [s for s in sorted(real_data.keys()) if s != 3]
+    real_display = {s: subtract_B0(real_data[s], B0_real if is_cvt else None) for s in display_slots}
+    mock_display = {s: subtract_B0(mock_data.get(s, {}), B0_mock if is_cvt else None) for s in display_slots}
+
+    # Collect all sensor IDs present across display slots
+    all_sensor_ids = sorted(set(sid for sd in display_slots for sid in real_data[sd].keys()))
+
+    # Print table
+    print("\n" + "=" * 110)
+    suffix = " (B_meas - B0)" if is_cvt else ""
+    if model_req is not None:
+        print(f"Magnetic Field Comparison: Real vs Mock (Gs, after R_CORR correction){suffix}")
+    else:
+        print(f"Magnetic Field Values (Gs, after R_CORR correction){suffix}")
+    print("=" * 110)
+
+    col_w = 10
+    def fmt_row(name, sid, r, m):
+        if model_req is not None and m:
+            dB = r['B_mag'] - m['B_mag']
+            return (f"{name:<8}{sid:<8}"
+                    f"{r['Bx']:>10.2f}{r['By']:>10.2f}{r['Bz']:>10.2f}{r['B_mag']:>10.2f}"
+                    f"{m['Bx']:>10.2f}{m['By']:>10.2f}{m['Bz']:>10.2f}{m['B_mag']:>10.2f}"
+                    f"{dB:>8.2f}")
+        else:
+            return (f"{name:<8}{sid:<8}"
+                    f"{r['Bx']:>10.2f}{r['By']:>10.2f}{r['Bz']:>10.2f}{r['B_mag']:>10.2f}")
+
+    if model_req is not None:
+        print(f"{'Slot':<8}{'Sensor':<8}"
+              f"{'Bx_real':>10}{'By_real':>10}{'Bz_real':>10}{'|B|_real':>10}"
+              f"{'Bx_mock':>10}{'By_mock':>10}{'Bz_mock':>10}{'|B|_mock':>10}"
+              f"{'d|B|':>8}")
+        print("-" * 110)
+    else:
+        print(f"{'Slot':<8}{'Sensor':<8}{'Bx(Gs)':>12}{'By(Gs)':>12}{'Bz(Gs)':>12}{'|B|(Gs)':>12}")
+        print("-" * 56)
+
+    for slot_idx in display_slots:
+        name = slot_names.get(slot_idx, f'slot{slot_idx}')
+        for sid in all_sensor_ids:
+            real_row = real_display[slot_idx].get(sid)
+            if real_row is None:
+                continue
+            mock_row = mock_display[slot_idx].get(sid, {}) if model_req else {}
+            print(fmt_row(name, sid, real_row, mock_row))
+
+    if model_req is not None:
+        print("-" * 110)
+        print("\nSlot Mean |B| Summary (Gs):")
+        print(f"{'Slot':<12}{'Real':>12}{'Mock':>12}{'d|B|':>12}")
+        print("-" * 50)
+        for slot_idx in display_slots:
+            name = slot_names.get(slot_idx, f'slot{slot_idx}')
+            r_vals = [v['B_mag'] for v in real_display[slot_idx].values()]
+            m_vals = [v['B_mag'] for v in mock_display[slot_idx].values()]
+            if m_vals:
+                d = np.mean(r_vals) - np.mean(m_vals)
+                print(f"{name:<12}{np.mean(r_vals):>12.2f}{np.mean(m_vals):>12.2f}{d:>12.2f}")
+            else:
+                print(f"{name:<12}{np.mean(r_vals):>12.2f}{'N/A':>12}{'N/A':>12}")
+
+    # Save to CSV
+    if output_csv:
+        import csv
+        all_rows = []
+        for slot_idx in display_slots:
+            for sid in sorted(real_display[slot_idx].keys()):
+                r = real_display[slot_idx][sid]
+                m = mock_display[slot_idx].get(sid, {'Bx': None, 'By': None, 'Bz': None, 'B_mag': None})
+                row = {
+                    'slot': slot_idx, 'slot_name': slot_names.get(slot_idx, f'slot{slot_idx}'),
+                    'sensor_id': sid,
+                    'Bx_real': r['Bx'], 'By_real': r['By'], 'Bz_real': r['Bz'], 'B_mag_real': r['B_mag'],
+                    'Bx_mock': m['Bx'], 'By_mock': m['By'], 'Bz_mock': m['Bz'], 'B_mag_mock': m['B_mag'],
+                }
+                if m['B_mag'] is not None:
+                    row['dB_mag'] = r['B_mag'] - m['B_mag']
+                all_rows.append(row)
+        with open(output_csv, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=['slot', 'slot_name', 'sensor_id',
+                    'Bx_real', 'By_real', 'Bz_real', 'B_mag_real',
+                    'Bx_mock', 'By_mock', 'Bz_mock', 'B_mag_mock', 'dB_mag'])
+            writer.writeheader()
+            writer.writerows(all_rows)
+        print(f"\nCSV saved to: {output_csv}")
+
+    return real_display, mock_display if model_req else None

@@ -117,9 +117,9 @@ def estimate_dipole_moment(measurements):
 
         # Measured magnetic field (world frame) - DIVIDE BY 4 as requested
         b_in_world = np.array([
-            m['b_in_world']['x'] / 4.0,
-            m['b_in_world']['y'] / 4.0,
-            m['b_in_world']['z'] / 4.0
+            m['b_in_world']['x'],
+            m['b_in_world']['y'],
+            m['b_in_world']['z']
         ])
 
         # Transform to source frame:

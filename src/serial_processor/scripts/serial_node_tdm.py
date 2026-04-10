@@ -26,7 +26,7 @@ class SerialNodeTDM:
     TERMINATOR = b'\r\n'
     UPLINK_MIN_SIZE = 17  # Header(2) + Version(1) + cycle_id(2) + slot(1) + Bitmap(2) + Timestamp(8) + cycle_end(1)
     SENSOR_DATA_SIZE = 7  # SensorID(1) + X(2) + Y(2) + Z(2)
-    SCALE_FACTOR = 32.0 / 32768.0 / 4.0  # STM32 sends 16-bit signed int, scale to actual value (TEMP: div4 for testing)
+    SCALE_FACTOR = 32.0 / 32768.0  # STM32 sends 16-bit signed int, scale to actual value
 
     def __init__(self):
         rospy.init_node('serial_node_tdm', anonymous=True)
