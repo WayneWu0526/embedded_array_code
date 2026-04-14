@@ -175,10 +175,7 @@ class EllipsoidCalibrationSampler:
             self._write_csv_row(
                 timestamp=datetime.now().isoformat(),
                 pose=current_pose,
-                sensor_data=sensor_data,
-                rot_x=angle_x_deg,
-                rot_y=angle_y_deg,
-                rot_z=angle_z_deg
+                sensor_data=sensor_data
             )
 
             rospy.loginfo(f"Test {i+1} completed and saved.")
@@ -238,8 +235,8 @@ class EllipsoidCalibrationSampler:
             csv_file = open(csv_path, 'w', newline='')
             writer = csv.writer(csv_file)
 
-            # Header: timestamp, rot_x, rot_y, rot_z, pos_x, pos_y, pos_z, qx, qy, qz, qw, sensor_1_x, sensor_1_y, sensor_1_z, ...
-            header = ['timestamp', 'rot_x_deg', 'rot_y_deg', 'rot_z_deg',
+            # Header: timestamp, pos_x, pos_y, pos_z, qx, qy, qz, qw, sensor_1_x, sensor_1_y, sensor_1_z, ...
+            header = ['timestamp',
                      'pos_x', 'pos_y', 'pos_z',
                      'qx', 'qy', 'qz', 'qw']
             for i in range(1, 13):
@@ -253,11 +250,10 @@ class EllipsoidCalibrationSampler:
             rospy.logerr(f"Failed to create CSV file: {e}")
             return None
 
-    def _write_csv_row(self, timestamp, pose, sensor_data, rot_x, rot_y, rot_z):
+    def _write_csv_row(self, timestamp, pose, sensor_data):
         """Write a data row to CSV."""
         row = [
             timestamp,
-            f"{rot_x:.2f}", f"{rot_y:.2f}", f"{rot_z:.2f}",
             f"{pose.position.x:.4f}", f"{pose.position.y:.4f}", f"{pose.position.z:.4f}",
             f"{pose.orientation.x:.4f}", f"{pose.orientation.y:.4f}",
             f"{pose.orientation.z:.4f}", f"{pose.orientation.w:.4f}"
