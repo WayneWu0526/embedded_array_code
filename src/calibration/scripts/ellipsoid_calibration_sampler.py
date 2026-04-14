@@ -257,17 +257,17 @@ class EllipsoidCalibrationSampler:
         """Write a data row to CSV."""
         row = [
             timestamp,
-            f"{rot_x:.3f}", f"{rot_y:.3f}", f"{rot_z:.3f}",
-            f"{pose.position.x:.6f}", f"{pose.position.y:.6f}", f"{pose.position.z:.6f}",
-            f"{pose.orientation.x:.6f}", f"{pose.orientation.y:.6f}",
-            f"{pose.orientation.z:.6f}", f"{pose.orientation.w:.6f}"
+            f"{rot_x:.2f}", f"{rot_y:.2f}", f"{rot_z:.2f}",
+            f"{pose.position.x:.4f}", f"{pose.position.y:.4f}", f"{pose.position.z:.4f}",
+            f"{pose.orientation.x:.4f}", f"{pose.orientation.y:.4f}",
+            f"{pose.orientation.z:.4f}", f"{pose.orientation.w:.4f}"
         ]
         for i in range(1, 13):
             if i in sensor_data:
                 x, y, z = sensor_data[i]
-                row.extend([f"{x:.3f}", f"{y:.3f}", f"{z:.3f}"])
+                row.extend([f"{x:.2f}", f"{y:.2f}", f"{z:.2f}"])
             else:
-                row.extend(["0.000", "0.000", "0.000"])
+                row.extend(["0.00", "0.00", "0.00"])
 
         self.csv_file.writerow(row)
         self.csv_file.flush()  # Ensure data is written immediately
