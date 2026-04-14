@@ -1,0 +1,68 @@
+<launch>
+    <!--
+        Calibration Joint Sweep Launch File
+
+        Starts all components for calibration joint sweep:
+          1. diana7 robot arm (joint7 control only)
+          2. STM32 sensor data collection
+          3. FY8300 signal generator
+          4. Calibration sweep node (3-channel sequential sweep)
+
+        Usage:
+            roslaunch calibration calibration_sweep.launch
+
+        Workflow (per launch):
+          1. CH3 ON -> wait 10s -> sweep -> CH3 OFF -> wait 10s
+          2. CH2 ON -> wait 10s -> sweep -> CH2 OFF -> wait 10s
+          3. CH1 ON -> wait 10s -> sweep -> CH1 OFF -> wait 10s
+          4. Exit
+
+        Run 6 times with different signal intensities to complete all 18 experiments.
+    -->
+
+    <!-- Start diana7 robot arm (no RViz, with magnetometer_array tool) -->
+    <include file="$(find zlab_robots_bringup)/launch/diana7/diana7_bringup.launch">
+        <arg name="use_rviz" value="false"/>
+        <arg name="robot_ip" value="192.168.31.200"/>
+        <arg name="tool_name" value="magnetometer_array"/>
+    </include>
+
+    <!-- Start STM32 and sensor data collection -->
+    <include file="$(find sensor_data_collection)/launch/stm32_manual.launch"/>
+
+    <!-- Start FY8300 signal generator with calibration params -->
+    <node name="fy8300_node" pkg="signal_generator" type="fy8300_node" output="screen">
+        <rosparam command="load" file="$(find calibration)/config/signal_params_calib.yaml"/>
+    </node>
+
+    <!--
+        Calibration sweep node parameters:
+
+        joint7_min: Starting angle in radians (default: -3.12 ≈ -179°)
+        joint7_max: Ending angle in radians (default: 3.12 ≈ +179°)
+        step_deg: Step size in degrees (default: 1.0)
+        num_samples: Number of samples to average at each position (default: 5)
+        move_duration_initial: Duration for large moves in seconds (default: 3.0)
+        move_duration_step: Duration for 1° steps in seconds (default: 0.5)
+        fy8300_wait: Wait time for FY8300 stabilization (default: 10.0)
+        output_dir: Directory to save CSV files
+    -->
+    <node
+        name="calibration_joint_sweep"
+        pkg="calibration"
+        type="calibration_joint_sweep.py"
+        output="screen"
+        required="False"
+    >
+        <param name="joint7_min" value="-3.12"/>
+        <param name="joint7_max" value="3.12"/>
+        <param name="step_deg" value="1.0"/>
+        <param name="num_samples" value="5"/>
+        <param name="settling_time" value="0.3"/>
+        <param name="move_duration_initial" value="6.0"/>
+        <param name="move_duration_step" value="1.0"/>
+        <param name="fy8300_wait" value="10.0"/>
+        <param name="output_dir" value="/home/zhang/embedded_array_ws/src/calibration/data"/>
+    </node>
+
+</launch>

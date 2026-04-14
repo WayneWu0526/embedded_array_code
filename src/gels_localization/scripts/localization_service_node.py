@@ -52,6 +52,10 @@ D_LIST = None  # Sensor physical offset positions (3 x 12)
 MOMENT_LIST = None  # Magnetic moment for each source (slot)
 GS_TO_TESLA = 1.0e-4  # Unit conversion factor
 
+# Per-sensor calibration parameters (C matrix and b_bias)
+CALIB_C = {}  # C matrix per sensor_id (0-indexed)
+CALIB_B_BIAS = {}  # b_bias per sensor_id (0-indexed)
+
 
 def load_configuration(yaml_path=None):
     """
@@ -61,7 +65,7 @@ def load_configuration(yaml_path=None):
         yaml_path: Optional path to calibration yaml. If None, uses default path
                    relative to this script: ../../../sensor_data_collection/config/sensor_calibration.yaml
     """
-    global R_CORR, D_LIST, MOMENT_LIST, GS_TO_TESLA
+    global R_CORR, D_LIST, MOMENT_LIST, GS_TO_TESLA, CALIB_C, CALIB_B_BIAS
 
     if yaml_path is None:
         # Default yaml path: sensor_data_collection/config/sensor_calibration.yaml
@@ -124,6 +128,73 @@ def load_configuration(yaml_path=None):
         3: np.array(r_corr_r3).reshape(3, 3, order='F'),
         4: np.array(r_corr_r4).reshape(3, 3, order='F'),
     }
+
+    # Load per-sensor calibration parameters (C matrix and b_bias)
+    calib_yaml_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        '..', '..', 'calibration', 'config', 'calibration_params.yaml'
+    )
+    _load_calib_params(calib_yaml_path)
+
+
+def _load_calib_params(calib_yaml_path):
+    """
+    Load per-sensor calibration parameters from yaml file.
+
+    Args:
+        calib_yaml_path: Path to calibration_params.yaml
+    """
+    global CALIB_C, CALIB_B_BIAS
+
+    # Default: identity matrix and zero bias for all 12 sensors
+    default_C = np.eye(3)
+    default_b_bias = np.zeros(3)
+
+    if os.path.exists(calib_yaml_path):
+        try:
+            import yaml
+            with open(calib_yaml_path) as f:
+                params = yaml.safe_load(f)
+
+            sensors = params.get('sensors', [])
+            for sensor in sensors:
+                sid = sensor.get('sensor_id')
+                if sid is None:
+                    continue
+
+                # Load C matrix (3x3)
+                C_raw = sensor.get('C', default_C.tolist())
+                if isinstance(C_raw, list) and len(C_raw) == 3:
+                    CALIB_C[sid] = np.array(C_raw)
+                else:
+                    CALIB_C[sid] = default_C.copy()
+
+                # Load b_bias (3x1)
+                b_bias_raw = sensor.get('b_bias', default_b_bias.tolist())
+                if isinstance(b_bias_raw, list) and len(b_bias_raw) == 3:
+                    CALIB_B_BIAS[sid] = np.array(b_bias_raw)
+                else:
+                    CALIB_B_BIAS[sid] = default_b_bias.copy()
+
+            print(f"[INFO] Calibration params loaded from {calib_yaml_path}")
+            print(f"[DEBUG] CALIB_C keys: {sorted(CALIB_C.keys())}")
+        except Exception as e:
+            print(f"[WARN] Failed to load calib yaml {calib_yaml_path}: {e}, using defaults")
+            _set_default_calib()
+    else:
+        print(f"[WARN] calib yaml not found: {calib_yaml_path}, using defaults")
+        _set_default_calib()
+
+
+def _set_default_calib():
+    """Set default calibration (identity C, zero b_bias) for all 12 sensors."""
+    global CALIB_C, CALIB_B_BIAS
+    default_C = np.eye(3)
+    default_b_bias = np.zeros(3)
+    for sid in range(12):
+        CALIB_C[sid] = default_C.copy()
+        CALIB_B_BIAS[sid] = default_b_bias.copy()
+
 
 def get_sensor_group(sensor_id):
     """Get rotation correction group for sensor id (1-indexed)"""
@@ -379,6 +450,12 @@ def handle_localize_cycle(req):
             # Background subtraction for CVT
             if mode == 'CVT' and B0 is not None:
                 B_meas = B_meas - B0
+
+            # Apply per-sensor C matrix calibration (b_bias not used yet)
+            for i, reading in enumerate(slot.sensor_data):
+                sid = reading.id
+                if sid in CALIB_C:
+                    B_meas[:, i] = CALIB_C[sid] @ B_meas[:, i] + CALIB_B_BIAS[sid]
 
             B_meas_cell.append(B_meas)
 

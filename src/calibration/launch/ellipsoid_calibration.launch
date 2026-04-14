@@ -1,0 +1,60 @@
+<launch>
+    <!--
+        Ellipsoid Calibration Launch File
+
+        Collects magnetic field sensor data at 500 different orientations
+        while keeping the robot end-effector position fixed.
+        Used for magnetometer ellipsoid calibration (hard/soft iron correction).
+
+        Usage:
+            roslaunch calibration ellipsoid_calibration.launch
+
+        Workflow:
+          1. Start diana7 robot arm with magnetometer_array tool
+          2. Start STM32 sensor data collection (manual mode, no FY8300)
+          3. Move robot to current position (fixed point)
+          4. Generate 500 orientations using Fibonacci sphere distribution
+          5. For each orientation:
+             - Move via MoveIt (position fixed)
+             - Wait settling_time
+             - Collect 10 sensor samples and average
+             - Write to CSV
+          6. Exit
+
+        Note: No FY8300 signal generator is used - sensor collects ambient magnetic field.
+    -->
+
+    <!-- Start diana7 robot arm (hardware + MoveIt, no RViz, with magnetometer_array tool) -->
+    <include file="$(find zlab_robots_bringup)/launch/diana7/diana7_bringup.launch">
+        <arg name="use_rviz" value="false"/>
+        <arg name="robot_ip" value="192.168.31.200"/>
+        <arg name="tool_name" value="magnetometer_array"/>
+    </include>
+
+    <!-- Start STM32 and sensor data collection (manual mode - no FY8300) -->
+    <include file="$(find sensor_data_collection)/launch/stm32_manual.launch"/>
+
+    <!--
+        Ellipsoid calibration sampler parameters:
+
+        num_poses: Number of orientation poses to collect (default: 500)
+        num_samples: Number of sensor samples to average per pose (default: 10)
+        settling_time: Wait time after movement for vibrations to settle (default: 0.5s)
+        speed_scaling: MoveIt speed factor for safety (default: 0.1)
+        output_dir: Directory to save CSV files
+        connect_wait_time: Time to wait for MoveIt to initialize (default: 5.0)
+    -->
+    <node
+        name="ellipsoid_calibration_sampler"
+        pkg="calibration"
+        type="ellipsoid_calibration_sampler.py"
+        output="screen"
+        required="False"
+    >
+        <param name="num_poses" value="10"/>
+        <param name="settling_time" value="0.5"/>
+        <param name="speed_scaling" value="0.08"/>
+        <param name="connect_wait_time" value="5.0"/>
+    </node>
+
+</launch>

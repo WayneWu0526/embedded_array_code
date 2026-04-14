@@ -1,0 +1,28 @@
+<launch>
+    <!--
+        Save Diana7 Home Position
+
+        Run this launch file after manually moving diana7 to a safe home position.
+        It will read the current joint states and save them to config/diana7_home.yaml.
+
+        Usage:
+            roslaunch calibration save_diana7_home.launch
+
+        Output:
+            config/diana7_home.yaml
+    -->
+
+    <!-- Start diana7 robot arm -->
+    <include file="$(find zlab_robots_bringup)/launch/diana7/diana7_bringup.launch">
+        <arg name="use_rviz" value="false"/>
+        <arg name="robot_ip" value="192.168.31.200"/>
+        <arg name="tool_name" value="magnetometer_array"/>
+    </include>
+
+    <!-- Wait for robot to be ready, then save home position -->
+    <node name="save_diana7_home"
+          pkg="calibration"
+          type="save_diana7_home.py"
+          output="screen"
+          required="False"/>
+</launch>

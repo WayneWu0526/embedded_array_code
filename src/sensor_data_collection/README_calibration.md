@@ -1,0 +1,3 @@
+roslaunch sensor_data_collection stm32_manual.launch
+
+rosrun serial_processor show_magnitude

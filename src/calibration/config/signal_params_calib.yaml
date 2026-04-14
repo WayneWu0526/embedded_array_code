@@ -1,0 +1,35 @@
+search_ports:
+  - "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+baudrate: 115200
+
+# 三通道配置 (TDM 分时复用)
+# DC直流输出配置
+
+initial_configs:
+  - channel_index: 1
+    waveform: 1          # DC波形
+    frequency: 0.0       # DC无需频率
+    amplitude: 0.0       # DC幅值为0
+    offset: 5.0          # +5V DC
+    phase: 0.0
+    duty_cycle: 0.0      # DC无需占空比
+    output_en: false
+    output_sync: false
+  - channel_index: 2
+    waveform: 1          # DC波形
+    frequency: 0.0
+    amplitude: 0.0
+    offset: 5.0          # +5V DC
+    phase: 0.0
+    duty_cycle: 0.0
+    output_en: false
+    output_sync: false
+  - channel_index: 3
+    waveform: 1          # DC波形
+    frequency: 0.0
+    amplitude: 0.0
+    offset: -5.0         # -5V DC
+    phase: 0.0
+    duty_cycle: 0.0
+    output_en: false
+    output_sync: false

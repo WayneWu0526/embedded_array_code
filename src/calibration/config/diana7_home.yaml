@@ -1,0 +1,22 @@
+diana7_home:
+  diana7_joint_1:
+    radians: 0.00038330796630425823
+    degrees: 0.02
+  diana7_joint_2:
+    radians: 0.2835226224566764
+    degrees: 16.24
+  diana7_joint_3:
+    radians: -0.00046757205269232216
+    degrees: -0.03
+  diana7_joint_4:
+    radians: 2.4981715642952187
+    degrees: 143.13
+  diana7_joint_5:
+    radians: -3.6139930384315726e-05
+    degrees: -0.0
+  diana7_joint_6:
+    radians: 1.2105264425895523
+    degrees: 69.36
+  diana7_joint_7:
+    radians: 0.0001556076795306005
+    degrees: 0.01
