@@ -63,6 +63,7 @@ class EllipsoidCalibrationSampler:
         # Sensor collection parameters
         self.num_samples = rospy.get_param('~num_samples', 10)
         self.settling_time = rospy.get_param('~settling_time', 0.5)
+        self.skip_poses = rospy.get_param('~skip_poses', 0)
 
         # Sensor data state
         self.latest_sensor_data = None
@@ -137,12 +138,20 @@ class EllipsoidCalibrationSampler:
         rospy.loginfo("Starting orientation test with joint7 sweep...")
         rospy.loginfo(f"Total Rx/Ry poses: {len(self.test_angles)}")
 
+        # Skip poses if resuming
+        if self.skip_poses > 0:
+            rospy.loginfo(f"Skipping first {self.skip_poses} poses (resuming from pose {self.skip_poses+1})...")
+            test_angles = self.test_angles[self.skip_poses:]
+        else:
+            test_angles = self.test_angles
+
         consecutive_failures = 0
         max_consecutive_failures = 3
-        valid_pose_count = 0
+        valid_pose_count = self.skip_poses  # Count already completed poses
 
-        for i, (angle_x_deg, angle_y_deg) in enumerate(self.test_angles):
-            rospy.loginfo(f"\n--- Rx/Ry Pose {i+1}/{len(self.test_angles)}: "
+        for i, (angle_x_deg, angle_y_deg) in enumerate(test_angles):
+            global_i = i + self.skip_poses
+            rospy.loginfo(f"\n--- Rx/Ry Pose {global_i+1}/{len(self.test_angles)}: "
                          f"Rx={angle_x_deg:.1f}°, Ry={angle_y_deg:.1f}° ---")
 
             # Generate target pose with rotation applied (Rz=0)
@@ -156,19 +165,30 @@ class EllipsoidCalibrationSampler:
             # Move using Cartesian path
             success = self._move_cartesian(target_pose)
             if not success:
-                rospy.logerr(f"Rx/Ry Pose {i+1} move failed")
+                rospy.logerr(f"Rx/Ry Pose {global_i+1} move failed")
                 consecutive_failures += 1
                 rospy.logwarn(f"Consecutive failures: {consecutive_failures}/{max_consecutive_failures}")
 
                 if consecutive_failures >= max_consecutive_failures:
-                    rospy.logwarn(f"Reached {max_consecutive_failures} consecutive failures. Moving to home...")
-                    self._move_to_home()
+                    rospy.logwarn(f"Reached {max_consecutive_failures} consecutive failures. Going home...")
+                    home_ok = self._move_to_home()
+
+                    if home_ok:
+                        rospy.loginfo("Home reached. Will continue with next orientation after settling...")
+                        rospy.sleep(2.0)  # Wait for robot to fully settle
+                        # Re-sync state before next orientation
+                        current_state = self.robot.get_current_state()
+                        self.diana7_group.set_start_state(current_state)
+                    else:
+                        rospy.logerr("Home move failed! Stopping for manual intervention.")
+                        self.csv_file.close()
+                        rospy.signal_shutdown("Home failed - manual intervention required")
+                        return
+
                     consecutive_failures = 0
-                    rospy.loginfo("Continuing with next orientation...")
+                    # Do NOT continue - let loop naturally proceed to next Rx/Ry after home completes
 
-                continue
-
-            rospy.loginfo(f"Rx/Ry Pose {i+1} move succeeded")
+            rospy.loginfo(f"Rx/Ry Pose {global_i+1} move succeeded")
             consecutive_failures = 0
             valid_pose_count += 1
 
@@ -220,9 +240,10 @@ class EllipsoidCalibrationSampler:
 
             rospy.loginfo(f"Joint7 sweep: {math.degrees(joint7_start):.1f}° -> {math.degrees(joint7_end):.1f}° (clamped)")
 
-            # Sweep joint7 through 180 degrees with 10 sample points
+            # Sweep joint7 through 180 degrees with 10 sample points, plus 0 at end
             num_samples = 10
             joint7_positions = np.linspace(joint7_start, joint7_end, num_samples)
+            joint7_positions = np.append(joint7_positions, 0.0)  # End with joint7=0
 
             for j, joint7_target in enumerate(joint7_positions):
                 # Clamp to safe bounds
@@ -252,7 +273,7 @@ class EllipsoidCalibrationSampler:
                     joint7_deg=math.degrees(joint7_target)
                 )
 
-            rospy.loginfo(f"Rx/Ry Pose {i+1} completed: {num_samples} samples saved.")
+            rospy.loginfo(f"Rx/Ry Pose {global_i+1} completed: {len(joint7_positions)} samples saved.")
 
         rospy.loginfo(f"\n=== Orientation test complete. Valid Rx/Ry poses: {valid_pose_count}/{len(self.test_angles)} ===")
 
@@ -268,6 +289,11 @@ class EllipsoidCalibrationSampler:
     def _move_to_home(self):
         """Move robot to home position and update reference pose."""
         rospy.loginfo("Moving to home position...")
+
+        # Sync state before moving
+        current_state = self.robot.get_current_state()
+        self.diana7_group.set_start_state(current_state)
+
         self.diana7_group.set_joint_value_target(self.home_joints)
         success = self.diana7_group.go(wait=True)
         self.diana7_group.stop()
@@ -327,9 +353,10 @@ class EllipsoidCalibrationSampler:
 
             joint7_end = max(joint7_min, min(joint7_max, joint7_end))
 
-            # 10 sample points
+            # 10 sample points, plus 0 at end
             num_samples = 10
             joint7_positions = np.linspace(joint7_start, joint7_end, num_samples)
+            joint7_positions = np.append(joint7_positions, 0.0)  # End with joint7=0
 
             for j, joint7_target in enumerate(joint7_positions):
                 joint7_target = max(joint7_min, min(joint7_max, joint7_target))
@@ -353,6 +380,10 @@ class EllipsoidCalibrationSampler:
 
     def _move_joint7_to(self, target_angle):
         """Move joint7 to target angle while keeping other joints at current values."""
+        # Sync state before moving
+        current_state = self.robot.get_current_state()
+        self.diana7_group.set_start_state(current_state)
+
         current_joints = self.diana7_group.get_current_joint_values()
         joint_names = self.diana7_group.get_active_joints()
 
@@ -542,43 +573,60 @@ class EllipsoidCalibrationSampler:
 
         return pose
 
-    def _move_cartesian(self, target_pose):
+    def _move_cartesian(self, target_pose, max_attempts=3):
         """
         Move to target pose using Cartesian path (like scan_controller.py).
 
         Args:
             target_pose: Target Pose to move to
+            max_attempts: Number of retry attempts
 
         Returns:
             bool: True if movement succeeded
         """
-        waypoints = [target_pose]
+        for attempt in range(max_attempts):
+            waypoints = [target_pose]
 
-        # Compute Cartesian path
-        (plan, fraction) = self.diana7_group.compute_cartesian_path(
-            waypoints, 0.01, True  # eef_step=0.01m, avoid_collisions=True
-        )
+            # Sync start state with actual robot state before planning
+            current_state = self.robot.get_current_state()
+            self.diana7_group.set_start_state(current_state)
 
-        if fraction < 0.9:
-            rospy.logwarn(f"Cartesian path fraction {fraction:.2%} < 90%, aborting")
-            return False
+            # Compute Cartesian path
+            (plan, fraction) = self.diana7_group.compute_cartesian_path(
+                waypoints, 0.01, True  # eef_step=0.01m, avoid_collisions=True
+            )
 
-        rospy.loginfo(f"Cartesian path computed: {fraction:.2%}")
+            if fraction < 0.9:
+                rospy.logwarn(f"Cartesian path fraction {fraction:.2%} < 90%, aborting")
+                return False
 
-        # Retime trajectory with speed scaling (like scan_controller.py)
-        plan = self.diana7_group.retime_trajectory(
-            self.robot.get_current_state(),
-            plan,
-            velocity_scaling_factor=self.speed_scaling,
-            acceleration_scaling_factor=self.speed_scaling
-        )
+            rospy.loginfo(f"Cartesian path computed: {fraction:.2%}")
 
-        # Execute plan
-        success = self.diana7_group.execute(plan, wait=True)
-        self.diana7_group.stop()
-        self.diana7_group.clear_pose_targets()
+            # Retime trajectory with speed scaling (like scan_controller.py)
+            plan = self.diana7_group.retime_trajectory(
+                self.robot.get_current_state(),
+                plan,
+                velocity_scaling_factor=self.speed_scaling,
+                acceleration_scaling_factor=self.speed_scaling
+            )
 
-        return success
+            # Execute plan
+            success = self.diana7_group.execute(plan, wait=True)
+            self.diana7_group.stop()
+            self.diana7_group.clear_pose_targets()
+
+            if success:
+                # Force state re-sync after successful execution
+                rospy.sleep(0.1)  # Small delay for state to update
+                return True
+
+            # If failed, re-sync state and retry
+            rospy.logwarn(f"Move attempt {attempt+1} failed, re-syncing state...")
+            current_state = self.robot.get_current_state()
+            self.diana7_group.set_start_state(current_state)
+
+        rospy.logerr(f"Move failed after {max_attempts} attempts")
+        return False
 
     def _config_to_joints(self):
         """Convert home config dict to ordered joint list."""
