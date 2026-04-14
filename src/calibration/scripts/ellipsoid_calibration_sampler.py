@@ -18,6 +18,7 @@ import os
 import math
 import csv
 import threading
+import numpy as np
 from datetime import datetime
 from geometry_msgs.msg import Pose, Quaternion
 from tf.transformations import quaternion_from_euler, euler_from_quaternion
@@ -110,23 +111,17 @@ class EllipsoidCalibrationSampler:
         rospy.loginfo(f"Reference pose: pos=({self.reference_pose.position.x:.4f}, "
                      f"{self.reference_pose.position.y:.4f}, {self.reference_pose.position.z:.4f})")
 
-        # Generate test orientations: ±10 degrees around X, Y, Z axes
-        # Z rotation will be swept from 0 to 90 degrees in later experiments
-        self.test_angles = [
-            (0, 0, 0),           # home
-            (10, 0, 0),          # +10 deg around X
-            (-10, 0, 0),         # -10 deg around X
-            (0, 10, 0),          # +10 deg around Y
-            (0, -10, 0),         # -10 deg around Y
-            (0, 0, 10),          # +10 deg around Z (for future sweep 0->90)
-            (0, 0, -10),         # -10 deg around Z
-        ]
+        # Generate orientations: Rx, Ry pairs using Fibonacci hemisphere
+        # Each (Rx, Ry) will have joint7 sweep through 180 degrees
+        self.test_angles = self._generate_rxry_hemisphere(num_poses=50)
 
         # Setup CSV output
-        self.csv_file = self._setup_csv()
-        if self.csv_file is None:
+        result = self._setup_csv()
+        if result is None:
             rospy.logerr("Failed to setup CSV file. Exiting.")
             sys.exit(1)
+
+        self.csv_file, self.csv_writer = result
 
         # Execute orientation test with data collection
         self.run_orientation_test()
@@ -138,47 +133,279 @@ class EllipsoidCalibrationSampler:
         rospy.signal_shutdown("done")
 
     def run_orientation_test(self):
-        """Test orientation generation with ±10 degree rotations and sensor collection."""
-        rospy.loginfo("Starting orientation test with ±10 degree rotations...")
+        """Test orientation generation with joint7 180-degree sweep per Rx/Ry pose."""
+        rospy.loginfo("Starting orientation test with joint7 sweep...")
+        rospy.loginfo(f"Total Rx/Ry poses: {len(self.test_angles)}")
 
-        for i, (angle_x_deg, angle_y_deg, angle_z_deg) in enumerate(self.test_angles):
-            rospy.loginfo(f"\n--- Test {i+1}/{len(self.test_angles)}: "
-                         f"rot_x={angle_x_deg}°, rot_y={angle_y_deg}°, rot_z={angle_z_deg}° ---")
+        consecutive_failures = 0
+        max_consecutive_failures = 3
+        valid_pose_count = 0
 
-            # Generate target pose with rotation applied
-            target_pose = self._generate_rotated_pose(angle_x_deg, angle_y_deg, angle_z_deg)
+        for i, (angle_x_deg, angle_y_deg) in enumerate(self.test_angles):
+            rospy.loginfo(f"\n--- Rx/Ry Pose {i+1}/{len(self.test_angles)}: "
+                         f"Rx={angle_x_deg:.1f}°, Ry={angle_y_deg:.1f}° ---")
+
+            # Generate target pose with rotation applied (Rz=0)
+            target_pose = self._generate_rotated_pose(angle_x_deg, angle_y_deg, angle_z_deg=0)
 
             rospy.loginfo(f"Target orientation: qx={target_pose.orientation.x:.4f}, "
                          f"qy={target_pose.orientation.y:.4f}, "
                          f"qz={target_pose.orientation.z:.4f}, "
                          f"qw={target_pose.orientation.w:.4f}")
 
-            # Move using Cartesian path (like scan_controller.py)
+            # Move using Cartesian path
             success = self._move_cartesian(target_pose)
-            if success:
-                rospy.loginfo(f"Test {i+1} move succeeded")
-            else:
-                rospy.logerr(f"Test {i+1} move failed")
+            if not success:
+                rospy.logerr(f"Rx/Ry Pose {i+1} move failed")
+                consecutive_failures += 1
+                rospy.logwarn(f"Consecutive failures: {consecutive_failures}/{max_consecutive_failures}")
+
+                if consecutive_failures >= max_consecutive_failures:
+                    rospy.logwarn(f"Reached {max_consecutive_failures} consecutive failures. Moving to home...")
+                    self._move_to_home()
+                    consecutive_failures = 0
+                    rospy.loginfo("Continuing with next orientation...")
+
                 continue
+
+            rospy.loginfo(f"Rx/Ry Pose {i+1} move succeeded")
+            consecutive_failures = 0
+            valid_pose_count += 1
 
             # Wait for vibrations to settle
             rospy.sleep(self.settling_time)
 
-            # Collect sensor data: 10 samples averaged
-            rospy.loginfo(f"Collecting {self.num_samples} sensor samples...")
-            sensor_data = self._collect_samples_at_position()
+            # Get current joint7 angle
+            current_joints = self.diana7_group.get_current_joint_values()
+            joint_names = self.diana7_group.get_active_joints()
+            joint7_idx = None
+            for idx, name in enumerate(joint_names):
+                if 'joint_7' in name.lower():
+                    joint7_idx = idx
+                    break
 
-            # Get current pose after movement
-            current_pose = self.diana7_group.get_current_pose().pose
+            if joint7_idx is None:
+                rospy.logerr("joint7 not found in active joints!")
+                continue
 
-            # Write to CSV
-            self._write_csv_row(
-                timestamp=datetime.now().isoformat(),
-                pose=current_pose,
-                sensor_data=sensor_data
-            )
+            joint7_start = current_joints[joint7_idx]
 
-            rospy.loginfo(f"Test {i+1} completed and saved.")
+            # Joint7 limits from URDF: ±3.12 rad (±178.8°)
+            joint7_min = -3.0
+            joint7_max = 3.0
+            rospy.loginfo(f"Joint7 limits: [{math.degrees(joint7_min):.1f}°, {math.degrees(joint7_max):.1f}°]")
+
+            # Ensure start is within bounds
+            joint7_start = max(joint7_min, min(joint7_max, joint7_start))
+            rospy.loginfo(f"Current joint7: {math.degrees(joint7_start):.1f}°")
+
+            # Calculate joint7 sweep range (180 degrees in joint space)
+            if joint7_start >= 0:
+                joint7_end = joint7_start - math.radians(180)
+            else:
+                joint7_end = joint7_start + math.radians(180)
+
+            # Clamp to joint limits
+            joint7_end = max(joint7_min, min(joint7_max, joint7_end))
+
+            # Ensure we have at least 90 degrees of sweep
+            sweep_range = abs(joint7_end - joint7_start)
+            if sweep_range < math.radians(90):
+                rospy.logwarn(f"Sweep range {math.degrees(sweep_range):.1f}° < 90°, adjusting...")
+                if joint7_start >= 0:
+                    joint7_end = joint7_start - math.radians(90)
+                else:
+                    joint7_end = joint7_start + math.radians(90)
+                joint7_end = max(joint7_min, min(joint7_max, joint7_end))
+
+            rospy.loginfo(f"Joint7 sweep: {math.degrees(joint7_start):.1f}° -> {math.degrees(joint7_end):.1f}° (clamped)")
+
+            # Sweep joint7 through 180 degrees with 10 sample points
+            num_samples = 10
+            joint7_positions = np.linspace(joint7_start, joint7_end, num_samples)
+
+            for j, joint7_target in enumerate(joint7_positions):
+                # Clamp to safe bounds
+                joint7_target = max(joint7_min, min(joint7_max, joint7_target))
+                rospy.loginfo(f"  Joint7 position {j+1}/{num_samples}: {math.degrees(joint7_target):.1f}°")
+
+                # Move joint7 to target position (keep other joints fixed)
+                move_ok = self._move_joint7_to(joint7_target)
+                if not move_ok:
+                    rospy.logwarn(f"  Joint7 position {j+1} move failed, skipping sample...")
+                    continue
+
+                # Wait for settling
+                rospy.sleep(self.settling_time)
+
+                # Collect sensor data: 10 samples averaged
+                sensor_data = self._collect_samples_at_position()
+
+                # Get current pose
+                current_pose = self.diana7_group.get_current_pose().pose
+
+                # Write to CSV
+                self._write_csv_row(
+                    timestamp=datetime.now().isoformat(),
+                    pose=current_pose,
+                    sensor_data=sensor_data,
+                    joint7_deg=math.degrees(joint7_target)
+                )
+
+            rospy.loginfo(f"Rx/Ry Pose {i+1} completed: {num_samples} samples saved.")
+
+        rospy.loginfo(f"\n=== Orientation test complete. Valid Rx/Ry poses: {valid_pose_count}/{len(self.test_angles)} ===")
+
+        # Fill remaining with random orientations if needed
+        target_total = len(self.test_angles)
+        if valid_pose_count < target_total:
+            fill_count = target_total - valid_pose_count
+            rospy.loginfo(f"Filling {fill_count} remaining poses with random orientations...")
+            self._fill_random_orientations(fill_count)
+
+        rospy.loginfo("All orientations processed.")
+
+    def _move_to_home(self):
+        """Move robot to home position and update reference pose."""
+        rospy.loginfo("Moving to home position...")
+        self.diana7_group.set_joint_value_target(self.home_joints)
+        success = self.diana7_group.go(wait=True)
+        self.diana7_group.stop()
+
+        if success:
+            rospy.loginfo("Robot reached home position.")
+            # Update reference pose to home pose
+            self.reference_pose = self.diana7_group.get_current_pose().pose
+        else:
+            rospy.logerr("Failed to reach home position.")
+
+    def _fill_random_orientations(self, fill_count):
+        """
+        Fill remaining poses with random (Rx, Ry) orientations and joint7 sweep.
+        This is called when some Rx/Ry poses fail to execute.
+        """
+        rospy.loginfo(f"Generating {fill_count} random orientations...")
+
+        for i in range(fill_count):
+            # Generate random Rx, Ry in [-90, 90] degrees
+            rx_deg = np.random.uniform(-90, 90)
+            ry_deg = np.random.uniform(-90, 90)
+
+            rospy.loginfo(f"\n--- Random Fill {i+1}/{fill_count}: Rx={rx_deg:.1f}°, Ry={ry_deg:.1f}° ---")
+
+            # Move to random orientation
+            target_pose = self._generate_rotated_pose(rx_deg, ry_deg, angle_z_deg=0)
+            success = self._move_cartesian(target_pose)
+
+            if not success:
+                rospy.logwarn(f"Random Fill {i+1} move failed, skipping...")
+                continue
+
+            rospy.sleep(self.settling_time)
+
+            # Get current joint7 angle
+            current_joints = self.diana7_group.get_current_joint_values()
+            joint_names = self.diana7_group.get_active_joints()
+            joint7_idx = None
+            for idx, name in enumerate(joint_names):
+                if 'joint_7' in name.lower():
+                    joint7_idx = idx
+                    break
+
+            if joint7_idx is None:
+                continue
+
+            joint7_start = current_joints[joint7_idx]
+            joint7_min = -3.0
+            joint7_max = 3.0
+
+            # Random sweep direction
+            if np.random.rand() > 0.5:
+                joint7_end = joint7_start - math.radians(180)
+            else:
+                joint7_end = joint7_start + math.radians(180)
+
+            joint7_end = max(joint7_min, min(joint7_max, joint7_end))
+
+            # 10 sample points
+            num_samples = 10
+            joint7_positions = np.linspace(joint7_start, joint7_end, num_samples)
+
+            for j, joint7_target in enumerate(joint7_positions):
+                joint7_target = max(joint7_min, min(joint7_max, joint7_target))
+
+                move_ok = self._move_joint7_to(joint7_target)
+                if not move_ok:
+                    continue
+
+                rospy.sleep(self.settling_time)
+                sensor_data = self._collect_samples_at_position()
+                current_pose = self.diana7_group.get_current_pose().pose
+
+                self._write_csv_row(
+                    timestamp=datetime.now().isoformat(),
+                    pose=current_pose,
+                    sensor_data=sensor_data,
+                    joint7_deg=math.degrees(joint7_target)
+                )
+
+            rospy.loginfo(f"Random Fill {i+1} completed.")
+
+    def _move_joint7_to(self, target_angle):
+        """Move joint7 to target angle while keeping other joints at current values."""
+        current_joints = self.diana7_group.get_current_joint_values()
+        joint_names = self.diana7_group.get_active_joints()
+
+        # Find joint7 index
+        joint7_idx = None
+        for idx, name in enumerate(joint_names):
+            if 'joint_7' in name.lower():
+                joint7_idx = idx
+                break
+
+        if joint7_idx is None:
+            rospy.logerr("joint7 not found!")
+            return False
+
+        # Modify only joint7
+        target_joints = list(current_joints)
+        target_joints[joint7_idx] = target_angle
+
+        self.diana7_group.set_joint_value_target(target_joints)
+        success = self.diana7_group.go(wait=True)
+        self.diana7_group.stop()
+
+        return success
+
+    def _generate_rxry_hemisphere(self, num_poses=50):
+        """
+        Generate (Rx, Ry) angles for hemisphere coverage using Fibonacci spiral.
+
+        Args:
+            num_poses: Number of (Rx, Ry) pairs to generate (default 50)
+
+        Returns:
+            List of (Rx_deg, Ry_deg) tuples covering the hemisphere
+        """
+        angles = []
+
+        golden_angle = np.pi * (3.0 - np.sqrt(5.0))  # ~2.39996 radians
+
+        for i in range(num_poses):
+            # Fibonacci sphere distribution on hemisphere
+            t = i / float(num_poses)  # [0, 1)
+            phi = np.arccos(1 - t)  # [0, pi/2] for hemisphere (0 to 90° from north)
+            theta = golden_angle * i
+
+            # Map spherical coords to Rx, Ry (degrees)
+            # phi=0 -> (0, 0), phi=90° -> max spread at equator
+            rx_deg = 90 * np.sin(phi) * np.cos(theta)
+            ry_deg = 90 * np.sin(phi) * np.sin(theta)
+
+            angles.append((rx_deg, ry_deg))
+
+        rospy.loginfo(f"Generated {len(angles)} (Rx, Ry) orientation pairs")
+        return angles
 
     def _collect_samples_at_position(self):
         """
@@ -235,8 +462,8 @@ class EllipsoidCalibrationSampler:
             csv_file = open(csv_path, 'w', newline='')
             writer = csv.writer(csv_file)
 
-            # Header: timestamp, pos_x, pos_y, pos_z, qx, qy, qz, qw, sensor_1_x, sensor_1_y, sensor_1_z, ...
-            header = ['timestamp',
+            # Header: timestamp, joint7_deg, pos_x, pos_y, pos_z, qx, qy, qz, qw, sensor_1_x, ...
+            header = ['timestamp', 'joint7_deg',
                      'pos_x', 'pos_y', 'pos_z',
                      'qx', 'qy', 'qz', 'qw']
             for i in range(1, 13):
@@ -244,16 +471,17 @@ class EllipsoidCalibrationSampler:
             writer.writerow(header)
 
             rospy.loginfo(f"CSV file created: {csv_path}")
-            return csv_file
+            return csv_file, writer
 
         except Exception as e:
             rospy.logerr(f"Failed to create CSV file: {e}")
             return None
 
-    def _write_csv_row(self, timestamp, pose, sensor_data):
+    def _write_csv_row(self, timestamp, pose, sensor_data, joint7_deg=None):
         """Write a data row to CSV."""
         row = [
             timestamp,
+            f"{joint7_deg:.2f}" if joint7_deg is not None else "",
             f"{pose.position.x:.4f}", f"{pose.position.y:.4f}", f"{pose.position.z:.4f}",
             f"{pose.orientation.x:.4f}", f"{pose.orientation.y:.4f}",
             f"{pose.orientation.z:.4f}", f"{pose.orientation.w:.4f}"
@@ -265,7 +493,7 @@ class EllipsoidCalibrationSampler:
             else:
                 row.extend(["0.00", "0.00", "0.00"])
 
-        self.csv_file.writerow(row)
+        self.csv_writer.writerow(row)
         self.csv_file.flush()  # Ensure data is written immediately
 
     def _stm_uplink_callback(self, msg: StmUplink):

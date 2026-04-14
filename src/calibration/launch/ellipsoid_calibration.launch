@@ -51,7 +51,6 @@
         output="screen"
         required="False"
     >
-        <param name="num_poses" value="10"/>
         <param name="settling_time" value="0.5"/>
         <param name="speed_scaling" value="0.08"/>
         <param name="connect_wait_time" value="5.0"/>
