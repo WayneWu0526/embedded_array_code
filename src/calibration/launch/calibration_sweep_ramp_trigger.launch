@@ -1,0 +1,52 @@
+<launch>
+    <!--
+        Calibration Sweep Ramp Trigger Launch File
+
+        Monitors Hall sensor readings and triggers recording when magnetic field
+        reaches near maximum (32Gs), capturing one complete cycle of the ramp signal.
+
+        Starts all components:
+          1. STM32 sensor data collection
+          2. FY8300 signal generator (ramp signal: 5V -> -5V -> 5V, 10s period)
+          3. Calibration sweep trigger node
+
+        Usage:
+            roslaunch calibration calibration_sweep_ramp_trigger.launch
+
+        Workflow:
+          1. CH3 ON -> wait 10s -> monitor -> trigger on ~32Gs -> record cycle -> save -> CH3 OFF
+          2. Press ENTER -> CH2 ON -> wait 10s -> ... -> save
+          3. Press ENTER -> CH1 ON -> wait 10s -> ... -> save
+          4. Exit
+
+        Note: The FY8300 outputs continuous ramp signal. Recording is triggered
+        automatically when sensor reading reaches near 32Gs, and stops after
+        one complete cycle (when reading returns to 32Gs from -32Gs).
+    -->
+
+    <!-- Start STM32 and sensor data collection (manual mode - no FY8300 trigger) -->
+    <include file="$(find sensor_data_collection)/launch/stm32_manual.launch"/>
+
+    <!-- Start FY8300 signal generator with ramp params -->
+    <node name="fy8300_node" pkg="signal_generator" type="fy8300_node" output="screen">
+        <rosparam command="load" file="$(find calibration)/config/signal_params_calib_ramp.yaml"/>
+    </node>
+
+    <!--
+        Calibration sweep ramp trigger node parameters:
+
+        output_dir: Directory to save CSV files
+        fy8300_wait: Wait time for FY8300 stabilization (default: 10.0)
+    -->
+    <node
+        name="calibration_sweep_ramp_trigger"
+        pkg="calibration"
+        type="calibration_sweep_ramp_trigger.py"
+        output="screen"
+        required="False"
+    >
+        <param name="output_dir" value="/home/zhang/embedded_array_ws/src/calibration/data"/>
+        <param name="fy8300_wait" value="10.0"/>
+    </node>
+
+</launch>

@@ -1,0 +1,31 @@
+<launch>
+    <!--
+        Handheld Calibration Launch File
+
+        Manual data collection without robot arm.
+        Simply hold the sensor and move slowly by hand.
+
+        Usage:
+            roslaunch calibration handheld_calibration.launch
+    -->
+
+    <!-- Start STM32 and sensor data collection (manual mode - no FY8300) -->
+    <include file="$(find sensor_data_collection)/launch/stm32_manual.launch"/>
+
+    <!--
+        Handheld calibration sampler parameters:
+
+        samples_per_avg: Number of samples to average per CSV row (default: 10)
+    -->
+    <node
+        name="handheld_calibration_sampler"
+        pkg="calibration"
+        type="handheld_calibration_sampler.py"
+        output="screen"
+        required="False"
+    >
+        <param name="samples_per_avg" value="10"/>
+        <param name="max_samples" value="500"/>
+    </node>
+
+</launch>
