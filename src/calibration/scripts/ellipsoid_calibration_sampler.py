@@ -86,13 +86,16 @@ class EllipsoidCalibrationSampler:
         rospy.loginfo(f"Reference pose: pos=({self.reference_pose.position.x:.4f}, "
                      f"{self.reference_pose.position.y:.4f}, {self.reference_pose.position.z:.4f})")
 
-        # Generate test orientations: ±10 degrees around X and Y axes
+        # Generate test orientations: ±10 degrees around X, Y, Z axes
+        # Z rotation will be swept from 0 to 90 degrees in later experiments
         self.test_angles = [
-            (0, 0),           # home
-            (10, 0),          # +10 deg around X
-            (-10, 0),         # -10 deg around X
-            (0, 10),          # +10 deg around Y
-            (0, -10),         # -10 deg around Y
+            (0, 0, 0),           # home
+            (10, 0, 0),          # +10 deg around X
+            (-10, 0, 0),         # -10 deg around X
+            (0, 10, 0),          # +10 deg around Y
+            (0, -10, 0),         # -10 deg around Y
+            (0, 0, 10),          # +10 deg around Z (for future sweep 0->90)
+            (0, 0, -10),         # -10 deg around Z
         ]
 
         # Execute orientation test
@@ -104,12 +107,12 @@ class EllipsoidCalibrationSampler:
         """Test orientation generation with ±10 degree rotations."""
         rospy.loginfo("Starting orientation test with ±10 degree rotations...")
 
-        for i, (angle_x_deg, angle_y_deg) in enumerate(self.test_angles):
+        for i, (angle_x_deg, angle_y_deg, angle_z_deg) in enumerate(self.test_angles):
             rospy.loginfo(f"\n--- Test {i+1}/{len(self.test_angles)}: "
-                         f"rot_x={angle_x_deg}°, rot_y={angle_y_deg}° ---")
+                         f"rot_x={angle_x_deg}°, rot_y={angle_y_deg}°, rot_z={angle_z_deg}° ---")
 
             # Generate target pose with rotation applied
-            target_pose = self._generate_rotated_pose(angle_x_deg, angle_y_deg)
+            target_pose = self._generate_rotated_pose(angle_x_deg, angle_y_deg, angle_z_deg)
 
             rospy.loginfo(f"Target orientation: qx={target_pose.orientation.x:.4f}, "
                          f"qy={target_pose.orientation.y:.4f}, "
@@ -125,13 +128,14 @@ class EllipsoidCalibrationSampler:
 
             rospy.sleep(0.5)
 
-    def _generate_rotated_pose(self, angle_x_deg, angle_y_deg):
+    def _generate_rotated_pose(self, angle_x_deg, angle_y_deg, angle_z_deg=0):
         """
-        Generate a pose with rotations around X and Y axes applied to reference pose.
+        Generate a pose with rotations around X, Y, Z axes applied to reference pose.
 
         Args:
             angle_x_deg: Rotation angle around X axis in degrees
             angle_y_deg: Rotation angle around Y axis in degrees
+            angle_z_deg: Rotation angle around Z axis in degrees (default: 0, for future sweep 0->90)
 
         Returns:
             Pose: New pose with rotated orientation, same position
@@ -148,9 +152,10 @@ class EllipsoidCalibrationSampler:
         # Add the test rotations
         new_roll = roll + math.radians(angle_x_deg)
         new_pitch = pitch + math.radians(angle_y_deg)
+        new_yaw = yaw + math.radians(angle_z_deg)
 
         # Convert back to quaternion
-        new_quat = quaternion_from_euler(new_roll, new_pitch, yaw)
+        new_quat = quaternion_from_euler(new_roll, new_pitch, new_yaw)
 
         # Create new pose with rotated orientation
         pose = Pose()
