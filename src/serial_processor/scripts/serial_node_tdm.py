@@ -16,6 +16,9 @@ import struct
 import threading
 import math
 import glob
+import os
+import json
+import numpy as np
 from std_msgs.msg import Header, Float32MultiArray
 from serial_processor.msg import SensorData, StmUplink, StmDownlink
 
@@ -43,10 +46,17 @@ class SerialNodeTDM:
         self.data_lock = threading.Lock()
         self.connect()
 
-        # Publisher for uplink data
+        # Publisher for uplink data (corrected)
         self.pub = rospy.Publisher('stm_uplink', StmUplink, queue_size=100)
+        # Publisher for raw uplink data (uncorrected, for archive/Phase 2-5)
+        self.pub_raw = rospy.Publisher('stm_uplink_raw', StmUplink, queue_size=100)
         # Publisher for magnetic field magnitude of each sensor
         self.pub_magnitude = rospy.Publisher('stm_magnitude', Float32MultiArray, queue_size=100)
+        # Publisher for raw magnetic field magnitude (uncorrected)
+        self.pub_magnitude_raw = rospy.Publisher('stm_magnitude_raw', Float32MultiArray, queue_size=100)
+
+        # Load ellipsoid calibration parameters
+        self._load_calibration_params()
 
         # Subscriber for downlink commands
         self.sub = rospy.Subscriber('stm_downlink', StmDownlink, self._downlink_callback)
@@ -79,6 +89,50 @@ class SerialNodeTDM:
             rospy.logwarn("No /dev/ttyACM* device found, fallback to /dev/ttyACM")
 
         return port
+
+    def _load_calibration_params(self):
+        """Load ellipsoid calibration parameters from intrinsic_params.json"""
+        # Find the config file relative to this script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(script_dir, '..', 'config', 'intrinsic_params.json')
+        config_path = os.path.normpath(config_path)
+
+        try:
+            with open(config_path, 'r') as f:
+                params = json.load(f)
+
+            self.offset = {}  # sensor_id -> np.array([ox, oy, oz])
+            self.correction = {}  # sensor_id -> np.array(3x3)
+
+            for sensor in params['sensors']:
+                sid = sensor['sensor_id']
+                self.offset[sid] = np.array(sensor['o_i'])
+                self.correction[sid] = np.array(sensor['C_i'])
+
+            rospy.loginfo(f"Loaded ellipsoid calibration for {len(params['sensors'])} sensors")
+        except Exception as e:
+            rospy.logwarn(f"Failed to load calibration params from {config_path}: {e}")
+            self.offset = {}
+            self.correction = {}
+
+    def _apply_ellipsoid_correction(self, raw_x, raw_y, raw_z, sensor_id):
+        """Apply ellipsoid correction to raw sensor data.
+
+        Args:
+            raw_x, raw_y, raw_z: Raw sensor readings (after scale)
+            sensor_id: Sensor ID (1-12)
+
+        Returns:
+            Tuple of (corrected_x, corrected_y, corrected_z)
+        """
+        if sensor_id not in self.offset or sensor_id not in self.correction:
+            return raw_x, raw_y, raw_z
+
+        o_i = self.offset[sensor_id]
+        C_i = self.correction[sensor_id]
+        b_raw = np.array([raw_x, raw_y, raw_z])
+        b_corr = (b_raw - o_i) @ C_i.T
+        return b_corr[0], b_corr[1], b_corr[2]
 
     def connect(self):
         try:
@@ -249,10 +303,36 @@ class SerialNodeTDM:
                         frame = buffer[:end_idx]
                         msg = self._parse_uplink(frame)
                         if msg is not None:
-                            self.pub.publish(msg)
-                            # Publish magnetic field magnitude for each sensor
+                            # Publish raw data first (for archive/Phase 2-5)
+                            self.pub_raw.publish(msg)
+
+                            # Publish raw magnetic field magnitude
+                            raw_magnitudes = Float32MultiArray()
+                            raw_magnitudes.data = [math.sqrt(s.x**2 + s.y**2 + s.z**2) for s in msg.sensor_data]
+                            self.pub_magnitude_raw.publish(raw_magnitudes)
+
+                            # Apply ellipsoid correction to sensor data
+                            corrected_sensors = []
+                            for s in msg.sensor_data:
+                                cx, cy, cz = self._apply_ellipsoid_correction(s.x, s.y, s.z, s.id)
+                                corrected_sensors.append(SensorData(id=s.id, x=cx, y=cy, z=cz))
+
+                            # Create corrected message
+                            corrected_msg = StmUplink()
+                            corrected_msg.header = msg.header
+                            corrected_msg.cycle_id = msg.cycle_id
+                            corrected_msg.slot = msg.slot
+                            corrected_msg.bitmap = msg.bitmap
+                            corrected_msg.timestamp = msg.timestamp
+                            corrected_msg.sensor_data = corrected_sensors
+                            corrected_msg.cycle_end = msg.cycle_end
+
+                            # Publish corrected data
+                            self.pub.publish(corrected_msg)
+
+                            # Publish magnetic field magnitude (based on corrected data)
                             magnitudes = Float32MultiArray()
-                            magnitudes.data = [math.sqrt(s.x**2 + s.y**2 + s.z**2) for s in msg.sensor_data]
+                            magnitudes.data = [math.sqrt(s.x**2 + s.y**2 + s.z**2) for s in corrected_msg.sensor_data]
                             self.pub_magnitude.publish(magnitudes)
                         else:
                             rospy.logwarn(f"Dropping invalid uplink frame (len={len(frame)}): {frame[:16].hex()}...")

@@ -69,18 +69,18 @@ class EllipsoidCalibrationSampler:
         self.latest_sensor_data = None
         self.mutex = threading.Lock()
 
-        # Subscribe to stm_uplink for sensor data
-        rospy.loginfo("Subscribing to stm_uplink topic...")
+        # Subscribe to stm_uplink_raw for raw sensor data (not calibrated)
+        rospy.loginfo("Subscribing to stm_uplink_raw topic...")
         self.sub_stm_uplink = rospy.Subscriber(
-            "stm_uplink",
+            "stm_uplink_raw",
             StmUplink,
             self._stm_uplink_callback,
             queue_size=100
         )
 
-        # Wait for stm_uplink to be ready
+        # Wait for stm_uplink_raw to be ready
         rospy.sleep(1.0)
-        rospy.loginfo("stm_uplink subscriber ready.")
+        rospy.loginfo("stm_uplink_raw subscriber ready.")
 
         # Load diana7_home config
         self.home_config = self.load_home_config()
@@ -135,6 +135,7 @@ class EllipsoidCalibrationSampler:
 
     def run_orientation_test(self):
         """Test orientation generation with joint7 180-degree sweep per Rx/Ry pose."""
+        rospy.loginfo(f"DEBUG: skip_poses = {self.skip_poses}")
         rospy.loginfo("Starting orientation test with joint7 sweep...")
         rospy.loginfo(f"Total Rx/Ry poses: {len(self.test_angles)}")
 
@@ -269,8 +270,7 @@ class EllipsoidCalibrationSampler:
                 self._write_csv_row(
                     timestamp=datetime.now().isoformat(),
                     pose=current_pose,
-                    sensor_data=sensor_data,
-                    joint7_deg=math.degrees(joint7_target)
+                    sensor_data=sensor_data
                 )
 
             rospy.loginfo(f"Rx/Ry Pose {global_i+1} completed: {len(joint7_positions)} samples saved.")
@@ -372,8 +372,7 @@ class EllipsoidCalibrationSampler:
                 self._write_csv_row(
                     timestamp=datetime.now().isoformat(),
                     pose=current_pose,
-                    sensor_data=sensor_data,
-                    joint7_deg=math.degrees(joint7_target)
+                    sensor_data=sensor_data
                 )
 
             rospy.loginfo(f"Random Fill {i+1} completed.")
@@ -493,8 +492,8 @@ class EllipsoidCalibrationSampler:
             csv_file = open(csv_path, 'w', newline='')
             writer = csv.writer(csv_file)
 
-            # Header: timestamp, joint7_deg, pos_x, pos_y, pos_z, qx, qy, qz, qw, sensor_1_x, ...
-            header = ['timestamp', 'joint7_deg',
+            # Header: timestamp, pos_x, pos_y, pos_z, qx, qy, qz, qw, sensor_1_x, ...
+            header = ['timestamp',
                      'pos_x', 'pos_y', 'pos_z',
                      'qx', 'qy', 'qz', 'qw']
             for i in range(1, 13):
@@ -508,11 +507,10 @@ class EllipsoidCalibrationSampler:
             rospy.logerr(f"Failed to create CSV file: {e}")
             return None
 
-    def _write_csv_row(self, timestamp, pose, sensor_data, joint7_deg=None):
+    def _write_csv_row(self, timestamp, pose, sensor_data):
         """Write a data row to CSV."""
         row = [
             timestamp,
-            f"{joint7_deg:.2f}" if joint7_deg is not None else "",
             f"{pose.position.x:.4f}", f"{pose.position.y:.4f}", f"{pose.position.z:.4f}",
             f"{pose.orientation.x:.4f}", f"{pose.orientation.y:.4f}",
             f"{pose.orientation.z:.4f}", f"{pose.orientation.w:.4f}"
