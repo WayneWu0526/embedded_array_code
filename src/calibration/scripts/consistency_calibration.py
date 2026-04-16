@@ -109,7 +109,7 @@ class ConsistencyCalibration:
         row = [timestamp]
         for i in range(1, 13):
             x, y, z = avg_data[i]
-            row.extend([f"{x:.3f}", f"{y:.3f}", f"{z:.3f}"])
+            row.extend([f"{x:.7g}", f"{y:.7g}", f"{z:.7g}"])
         return row
 
     def _set_polarity(self, polarity: str):
@@ -197,7 +197,7 @@ class ConsistencyCalibration:
                 row = [timestamp]
                 for i in range(1, 13):
                     x, y, z = avg_data[i]
-                    row.extend([f"{x:.3f}", f"{y:.3f}", f"{z:.3f}"])
+                    row.extend([f"{x:.7g}", f"{y:.7g}", f"{z:.7g}"])
                 group_results.append(row)
 
             if (group_idx + 1) % 5 == 0 or group_idx == num_groups - 1:
@@ -292,7 +292,7 @@ class ConsistencyCalibration:
                 row = [timestamp]
                 for i in range(1, 13):
                     x, y, z = avg_data[i]
-                    row.extend([f"{x:.3f}", f"{y:.3f}", f"{z:.3f}"])
+                    row.extend([f"{x:.7g}", f"{y:.7g}", f"{z:.7g}"])
                 group_results.append(row)
 
             # Progress report every 5 groups or at specific intervals

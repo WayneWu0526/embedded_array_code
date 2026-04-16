@@ -1,0 +1,70 @@
+<launch>
+    <!--
+        Consistency Calibration Launch File
+
+        Performs consistency calibration for the 12-sensor magnetic array.
+        Sequentially energizes each of 3 EM coils (CH1, CH2, CH3) in both
+        positive and negative polarity, measuring the response of all 12 sensors.
+
+        Note: No robot arm required - this only measures magnetic field responses.
+
+        Workflow:
+          1. Start FY8300 signal generator with calibration config (offset=+5V)
+          2. Start STM32 serial communication
+          3. Collect background data (all channels OFF)
+          4. For each channel (1,2,3) and polarity (+/-):
+             - Enable channel, wait for settling
+             - Collect num_groups groups of averaged data
+             - Disable channel, wait for settling
+          5. Switch polarity (offset=-5V), repeat step 4
+          6. Run Phase 2 consistency fitting algorithm
+          7. Save consistency_params.json
+
+        Usage:
+            roslaunch calibration consistency_calibration.launch
+
+        Required hardware:
+          - FY8300 signal generator (connected to EM coils)
+          - STM32 sensor array
+    -->
+
+    <!-- ===================== -->
+    <!-- 1. Signal Generator (FY8300) -->
+    <!-- ===================== -->
+    <node name="fy8300" pkg="signal_generator" type="fy8300_node" output="screen">
+        <rosparam command="load"
+                  file="$(find calibration)/config/signal_params_calib.yaml"/>
+    </node>
+
+    <!-- ===================== -->
+    <!-- 2. Hall Sensor Serial Node (TDM Binary Protocol) -->
+    <!-- ===================== -->
+    <node name="serial_node_tdm" pkg="serial_processor" type="serial_node_tdm.py" output="screen">
+        <param name="port" value="/dev/ttyACM"/>
+        <param name="baudrate" value="921600"/>
+        <param name="sensor_float_endian" value="little"/>
+    </node>
+
+    <!-- ===================== -->
+    <!-- 3. Consistency Calibration Node -->
+    <!-- ===================== -->
+    <node
+        name="consistency_calibration"
+        pkg="calibration"
+        type="consistency_calibration.py"
+        output="screen"
+        required="False"
+    >
+        <!-- Timing parameters -->
+        <param name="wait_init_time" value="10.0"/>
+        <param name="wait_enable_time" value="3.0"/>
+
+        <!-- Collection parameters -->
+        <param name="num_groups" value="50"/>
+        <param name="samples_per_group" value="10"/>
+
+        <!-- Output directory -->
+        <param name="output_dir" value="$(find calibration)/data/consistency"/>
+    </node>
+
+</launch>
