@@ -1,1 +1,8 @@
+# Sensor Calibration Parameters
+# Unit conversion for sensor array
+
+# Unit conversion: Gs -> Tesla
 gs_to_tesla: 1.0e-4
+
+# Note: Sensor array hardware parameters (d_list, R_CORR) have been moved to
+# serial_processor/config/QMC6309/sensor_array_params.json
