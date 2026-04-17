@@ -19,8 +19,10 @@ import glob
 import os
 import json
 import numpy as np
+import rospkg
 from std_msgs.msg import Header, Float32MultiArray
 from serial_processor.msg import SensorData, StmUplink, StmDownlink
+from sensor_array_config import get_config, SensorArrayConfig
 
 
 class SerialNodeTDM:
@@ -41,22 +43,34 @@ class SerialNodeTDM:
         self.float_endian = '<' if float_endian in ('little', 'le', '<') else '>'
         self.float_endian_name = 'little' if self.float_endian == '<' else 'big'
 
+        # Load sensor array configuration
+        self._sensor_type = rospy.get_param('~sensor_type', 'QMC6309')
+        self._sensor_config: SensorArrayConfig = get_config(self._sensor_type)
+        self._adu_to_gs = self._sensor_config.manifest.adu_to_gs
+        rospy.loginfo(f"Using sensor type: {self._sensor_type}")
+
         # Serial connection
         self.ser = None
         self.data_lock = threading.Lock()
         self.connect()
 
-        # Publisher for uplink data (corrected)
+        # Publisher for uplink data (corrected: ellipsoid + R_CORR)
         self.pub = rospy.Publisher('stm_uplink', StmUplink, queue_size=100)
+        # Publisher for intermediate data: ellipsoid + R_CORR correction, before consistency correction
+        self.pub_ellipsoid_rotated = rospy.Publisher('stm_uplink_ellipsoid_rotated', StmUplink, queue_size=100)
         # Publisher for raw uplink data (uncorrected, for archive/Phase 2-5)
         self.pub_raw = rospy.Publisher('stm_uplink_raw', StmUplink, queue_size=100)
         # Publisher for magnetic field magnitude of each sensor
         self.pub_magnitude = rospy.Publisher('stm_magnitude', Float32MultiArray, queue_size=100)
+        # Publisher for ellipsoid_rotated magnetic field magnitude (intermediate)
+        self.pub_magnitude_ellipsoid_rotated = rospy.Publisher('stm_magnitude_ellipsoid_rotated', Float32MultiArray, queue_size=100)
         # Publisher for raw magnetic field magnitude (uncorrected)
         self.pub_magnitude_raw = rospy.Publisher('stm_magnitude_raw', Float32MultiArray, queue_size=100)
 
         # Load ellipsoid calibration parameters
         self._load_calibration_params()
+        # Load R_CORR rotation correction matrices
+        self._load_sensor_array_params()
 
         # Subscriber for downlink commands
         self.sub = rospy.Subscriber('stm_downlink', StmDownlink, self._downlink_callback)
@@ -91,29 +105,62 @@ class SerialNodeTDM:
         return port
 
     def _load_calibration_params(self):
-        """Load ellipsoid calibration parameters from intrinsic_params.json"""
-        # Find the config file relative to this script
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        config_path = os.path.join(script_dir, '..', 'config', 'intrinsic_params.json')
-        config_path = os.path.normpath(config_path)
-
+        """Load Phase 1 (ellipsoid) and Phase 2 (consistency) calibration params from SensorArrayConfig."""
         try:
-            with open(config_path, 'r') as f:
-                params = json.load(f)
-
-            self.offset = {}  # sensor_id -> np.array([ox, oy, oz])
-            self.correction = {}  # sensor_id -> np.array(3x3)
-
-            for sensor in params['sensors']:
-                sid = sensor['sensor_id']
-                self.offset[sid] = np.array(sensor['o_i'])
-                self.correction[sid] = np.array(sensor['C_i'])
-
-            rospy.loginfo(f"Loaded ellipsoid calibration for {len(params['sensors'])} sensors")
-        except Exception as e:
-            rospy.logwarn(f"Failed to load calibration params from {config_path}: {e}")
+            intrinsic = self._sensor_config.intrinsic
             self.offset = {}
             self.correction = {}
+            for sid, params in intrinsic.params.items():
+                self.offset[sid] = np.array(params.o_i)
+                self.correction[sid] = np.array(params.C_i)
+            rospy.loginfo(f"Loaded ellipsoid calibration for {len(self.offset)} sensors")
+
+            consistency = self._sensor_config.consistency
+            self.D_matrix = {}
+            self.e_bias = {}
+            for sid, params in consistency.params.items():
+                self.D_matrix[sid] = np.array(params.D_i)
+                self.e_bias[sid] = np.array(params.e_i)
+            rospy.loginfo(f"Loaded consistency calibration for {len(self.D_matrix)} sensors")
+        except Exception as e:
+            rospy.logwarn(f"Failed to load calibration params: {e}")
+            self.offset = {}
+            self.correction = {}
+            self.D_matrix = {}
+            self.e_bias = {}
+
+    def _get_sensor_group(self, sensor_id):
+        """Get rotation correction group for sensor id (1-indexed). Uses config."""
+        return self._sensor_to_group.get(sensor_id)
+
+    def _load_sensor_array_params(self):
+        """Load d_list and R_CORR from SensorArrayConfig."""
+        try:
+            hw = self._sensor_config.hardware
+            self._d_list = np.array(hw.d_list)
+            manifest = self._sensor_config.manifest
+            self._n_sensors = manifest.n_sensors
+            self._n_groups = manifest.n_groups
+            self._sensors_per_group = manifest.sensors_per_group
+            # Build R_CORR dict: group_index (1-based) -> np.array(3x3)
+            self.R_CORR = {}
+            for i, r_corr_flat in enumerate(hw.R_CORR):
+                self.R_CORR[i + 1] = np.array(r_corr_flat).reshape(3, 3, order='F')
+            rospy.loginfo(f"Loaded sensor array params: {self._n_sensors} sensors, {self._n_groups} groups")
+        except Exception as e:
+            rospy.logwarn(f"Failed to load sensor array params: {e}")
+            # Fallback: will use empty configs
+            self._d_list = np.array([])
+            self._n_sensors = 0
+            self._n_groups = 0
+            self._sensors_per_group = 0
+            self.R_CORR = {}
+
+        # Build sensor -> group lookup
+        self._sensor_to_group = {
+            sid: self._sensor_config.get_group_for_sensor(sid)
+            for sid in self._sensor_config.get_sensor_ids()
+        }
 
     def _apply_ellipsoid_correction(self, raw_x, raw_y, raw_z, sensor_id):
         """Apply ellipsoid correction to raw sensor data.
@@ -236,9 +283,9 @@ class SerialNodeTDM:
                 sid = sensor_chunk[0]
                 # STM32 sends big-endian 16-bit signed integers
                 raw_x, raw_y, raw_z = struct.unpack('>hhh', sensor_chunk[1:7])
-                x = raw_x * self.SCALE_FACTOR
-                y = raw_y * self.SCALE_FACTOR
-                z = raw_z * self.SCALE_FACTOR
+                x = raw_x * self._adu_to_gs
+                y = raw_y * self._adu_to_gs
+                z = raw_z * self._adu_to_gs
                 if not all(math.isfinite(value) for value in (x, y, z)):
                     rospy.logwarn(
                         f"Non-finite sensor payload detected: cycle_id={cycle_id}, slot={slot}, "
@@ -252,7 +299,7 @@ class SerialNodeTDM:
 
             bitmap_sensor_count = bin(bitmap).count('1')
             if bitmap_sensor_count != sensor_count:
-                rospy.logwarn(
+                rospy.logdebug(
                     f"Bitmap/sensor count mismatch: bitmap={bitmap_sensor_count}, parsed={sensor_count}"
                 )
 
@@ -312,10 +359,40 @@ class SerialNodeTDM:
                             self.pub_magnitude_raw.publish(raw_magnitudes)
 
                             # Apply ellipsoid correction to sensor data
+                            ellipsoid_rotated_sensors = []
                             corrected_sensors = []
                             for s in msg.sensor_data:
                                 cx, cy, cz = self._apply_ellipsoid_correction(s.x, s.y, s.z, s.id)
+                                # Apply R_CORR rotation (transform from sensor-local to reference frame)
+                                group = self._sensor_to_group.get(s.id, None)
+                                if group is not None and group in self.R_CORR:
+                                    b_rot = self.R_CORR[group] @ np.array([cx, cy, cz])
+                                    cx, cy, cz = b_rot[0], b_rot[1], b_rot[2]
+                                # Save intermediate result (ellipsoid + R_CORR, before consistency)
+                                ellipsoid_rotated_sensors.append(SensorData(id=s.id, x=cx, y=cy, z=cz))
+                                # Apply consistency correction: D_i * b + e_i
+                                if s.id in self.D_matrix and s.id in self.e_bias:
+                                    b_cons = self.D_matrix[s.id] @ np.array([cx, cy, cz]) + self.e_bias[s.id]
+                                    cx, cy, cz = b_cons[0], b_cons[1], b_cons[2]
                                 corrected_sensors.append(SensorData(id=s.id, x=cx, y=cy, z=cz))
+
+                            # Create ellipsoid_rotated message (intermediate: after ellipsoid + R_CORR, before consistency)
+                            ellipsoid_rotated_msg = StmUplink()
+                            ellipsoid_rotated_msg.header = msg.header
+                            ellipsoid_rotated_msg.cycle_id = msg.cycle_id
+                            ellipsoid_rotated_msg.slot = msg.slot
+                            ellipsoid_rotated_msg.bitmap = msg.bitmap
+                            ellipsoid_rotated_msg.timestamp = msg.timestamp
+                            ellipsoid_rotated_msg.sensor_data = ellipsoid_rotated_sensors
+                            ellipsoid_rotated_msg.cycle_end = msg.cycle_end
+
+                            # Publish ellipsoid_rotated data
+                            self.pub_ellipsoid_rotated.publish(ellipsoid_rotated_msg)
+
+                            # Publish magnetic field magnitude (based on ellipsoid_rotated data)
+                            magnitudes_ellipsoid_rotated = Float32MultiArray()
+                            magnitudes_ellipsoid_rotated.data = [math.sqrt(s.x**2 + s.y**2 + s.z**2) for s in ellipsoid_rotated_msg.sensor_data]
+                            self.pub_magnitude_ellipsoid_rotated.publish(magnitudes_ellipsoid_rotated)
 
                             # Create corrected message
                             corrected_msg = StmUplink()
