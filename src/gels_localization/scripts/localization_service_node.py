@@ -29,6 +29,7 @@ if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 
 from maps_estimator import MaPS_Estimator
+from sensor_array_config import get_config, SensorArrayConfig
 
 # ROS imports - optional for standalone testing
 try:
@@ -42,172 +43,51 @@ except ImportError:
     LocalizeCycleResponse = None
 
 
+# Load sensor type from rosparam (if ROS is available, otherwise default)
+_SENSOR_TYPE = 'QMC6309'
+_SENSOR_CONFIG: SensorArrayConfig = None
+
+def _get_sensor_config():
+    global _SENSOR_CONFIG, _SENSOR_TYPE
+    if _SENSOR_CONFIG is None:
+        if ROS_AVAILABLE:
+            _SENSOR_TYPE = rospy.get_param('~sensor_type', 'QMC6309')
+        _SENSOR_CONFIG = get_config(_SENSOR_TYPE)
+    return _SENSOR_CONFIG
+
+
 # =============================================================================
 # [1] CONFIGURATION LOADING (load from rosparam)
 # =============================================================================
 
 # Global calibration parameters (loaded from yaml)
-R_CORR = {}  # Rotation correction matrices per sensor group
+# Note: R_CORR is applied in serial_processor and is not used in gels_localization.
 D_LIST = None  # Sensor physical offset positions (3 x 12)
 MOMENT_LIST = None  # Magnetic moment for each source (slot)
 GS_TO_TESLA = 1.0e-4  # Unit conversion factor
 
-# Per-sensor calibration parameters (C matrix and b_bias)
-CALIB_C = {}  # C matrix per sensor_id (0-indexed)
-CALIB_B_BIAS = {}  # b_bias per sensor_id (0-indexed)
-
 
 def load_configuration(yaml_path=None):
     """
-    Load sensor calibration parameters from yaml file.
+    Load sensor calibration parameters from sensor_array_config.
 
     Args:
-        yaml_path: Optional path to calibration yaml. If None, uses default path
-                   relative to this script: ../../../sensor_data_collection/config/sensor_calibration.yaml
+        yaml_path: Deprecated. Kept for backward compatibility but ignored.
+                   Configuration now comes from sensor_array_config package.
     """
-    global R_CORR, D_LIST, MOMENT_LIST, GS_TO_TESLA, CALIB_C, CALIB_B_BIAS
+    global D_LIST, GS_TO_TESLA
 
-    if yaml_path is None:
-        # Default yaml path: sensor_data_collection/config/sensor_calibration.yaml
-        yaml_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            '..', '..', 'sensor_data_collection', 'config', 'sensor_calibration.yaml'
-        )
+    config = _get_sensor_config()
 
-    # Default values (fallback only)
-    r_corr_r1 = [1, 0, 0, 0, 0, -1, 0, 1, 0]
-    r_corr_r2 = [1, 0, 0, 0, 0, 1, 0, -1, 0]
-    r_corr_r3 = [-1, 0, 0, 0, 0, 1, 0, 1, 0]
-    r_corr_r4 = [-1, 0, 0, 0, 0, -1, 0, -1, 0]
-    de1, de2, de3 = 1.0e-3, 2.0e-3, 2.1e-3
-    d_list_default = [
-        [-de2/2,  de3/2, -de1], [-de2/2,  de3/2,  0   ], [-de2/2,  de3/2,  de1 ],
-        [-de2/2, -de3/2, -de1], [-de2/2, -de3/2,  0   ], [-de2/2, -de3/2,  de1 ],
-        [ de2/2,  de3/2, -de1], [ de2/2,  de3/2,  0   ], [ de2/2,  de3/2,  de1 ],
-        [ de2/2, -de3/2, -de1], [ de2/2, -de3/2,  0   ], [ de2/2, -de3/2,  de1 ],
-    ]
-    gs_to_tesla_default = 1.0e-4
+    # D_LIST from hardware params (3 x n_sensors)
+    hw = config.hardware
+    D_LIST = np.array(hw.d_list).T  # Convert to 3 x N matrix
 
-    # Try to load from yaml file
-    if os.path.exists(yaml_path):
-        try:
-            import yaml
-            with open(yaml_path) as f:
-                params = yaml.safe_load(f)
+    # GS_TO_TESLA from config
+    GS_TO_TESLA = config.gs_to_si
 
-            # Load R_CORR
-            r_corr_r1 = params.get('r_corr_r1', r_corr_r1)
-            r_corr_r2 = params.get('r_corr_r2', r_corr_r2)
-            r_corr_r3 = params.get('r_corr_r3', r_corr_r3)
-            r_corr_r4 = params.get('r_corr_r4', r_corr_r4)
-
-            # Load D_LIST
-            d_list_raw = params.get('d_list', None)
-            if d_list_raw:
-                D_LIST = np.array(d_list_raw)
-            else:
-                D_LIST = np.array(d_list_default)
-
-            # Load GS_TO_TESLA
-            GS_TO_TESLA = params.get('gs_to_tesla', gs_to_tesla_default)
-
-            print(f"[INFO] Configuration loaded from {yaml_path}")
-        except Exception as e:
-            print(f"[WARN] Failed to load yaml {yaml_path}: {e}, using defaults")
-            D_LIST = np.array(d_list_default)
-            GS_TO_TESLA = gs_to_tesla_default
-    else:
-        print(f"[WARN] yaml file not found: {yaml_path}, using defaults")
-        D_LIST = np.array(d_list_default)
-        GS_TO_TESLA = gs_to_tesla_default
-
-    # Set R_CORR (column-major order, matching yaml layout)
-    R_CORR = {
-        1: np.array(r_corr_r1).reshape(3, 3, order='F'),
-        2: np.array(r_corr_r2).reshape(3, 3, order='F'),
-        3: np.array(r_corr_r3).reshape(3, 3, order='F'),
-        4: np.array(r_corr_r4).reshape(3, 3, order='F'),
-    }
-
-    # Load per-sensor calibration parameters (C matrix and b_bias)
-    calib_yaml_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        '..', '..', 'calibration', 'config', 'calibration_params.yaml'
-    )
-    _load_calib_params(calib_yaml_path)
-
-
-def _load_calib_params(calib_yaml_path):
-    """
-    Load per-sensor calibration parameters from yaml file.
-
-    Args:
-        calib_yaml_path: Path to calibration_params.yaml
-    """
-    global CALIB_C, CALIB_B_BIAS
-
-    # Default: identity matrix and zero bias for all 12 sensors
-    default_C = np.eye(3)
-    default_b_bias = np.zeros(3)
-
-    if os.path.exists(calib_yaml_path):
-        try:
-            import yaml
-            with open(calib_yaml_path) as f:
-                params = yaml.safe_load(f)
-
-            sensors = params.get('sensors', [])
-            for sensor in sensors:
-                sid = sensor.get('sensor_id')
-                if sid is None:
-                    continue
-
-                # Load C matrix (3x3)
-                C_raw = sensor.get('C', default_C.tolist())
-                if isinstance(C_raw, list) and len(C_raw) == 3:
-                    CALIB_C[sid] = np.array(C_raw)
-                else:
-                    CALIB_C[sid] = default_C.copy()
-
-                # Load b_bias (3x1)
-                b_bias_raw = sensor.get('b_bias', default_b_bias.tolist())
-                if isinstance(b_bias_raw, list) and len(b_bias_raw) == 3:
-                    CALIB_B_BIAS[sid] = np.array(b_bias_raw)
-                else:
-                    CALIB_B_BIAS[sid] = default_b_bias.copy()
-
-            print(f"[INFO] Calibration params loaded from {calib_yaml_path}")
-            print(f"[DEBUG] CALIB_C keys: {sorted(CALIB_C.keys())}")
-        except Exception as e:
-            print(f"[WARN] Failed to load calib yaml {calib_yaml_path}: {e}, using defaults")
-            _set_default_calib()
-    else:
-        print(f"[WARN] calib yaml not found: {calib_yaml_path}, using defaults")
-        _set_default_calib()
-
-
-def _set_default_calib():
-    """Set default calibration (identity C, zero b_bias) for all 12 sensors."""
-    global CALIB_C, CALIB_B_BIAS
-    default_C = np.eye(3)
-    default_b_bias = np.zeros(3)
-    for sid in range(12):
-        CALIB_C[sid] = default_C.copy()
-        CALIB_B_BIAS[sid] = default_b_bias.copy()
-
-
-def get_sensor_group(sensor_id):
-    """Get rotation correction group for sensor id (1-indexed)"""
-    if 1 <= sensor_id <= 3:
-        return 1
-    elif 4 <= sensor_id <= 6:
-        return 2
-    elif 7 <= sensor_id <= 9:
-        return 3
-    elif 10 <= sensor_id <= 12:
-        return 4
-    return None
-
+    print(f"[INFO] Configuration loaded for sensor type: {_SENSOR_TYPE}")
+    print(f"[INFO] D_LIST shape: {D_LIST.shape}, GS_TO_TESLA: {GS_TO_TESLA}")
 
 def quaternion_z_axis(q):
     """
@@ -277,8 +157,10 @@ def process_hall_data(sensor_readings):
     Process raw Hall sensor readings to magnetic field measurements.
 
     Applies:
-    - Rotation correction per sensor group (R_CORR)
     - Unit conversion (Gs -> Tesla)
+
+    Note: R_CORR is no longer applied here - it's now applied at the sensor level
+          in serial_processor. The data from stm_uplink is already R_CORR-corrected.
 
     Args:
         sensor_readings: list of SensorReading messages from one slot
@@ -292,18 +174,10 @@ def process_hall_data(sensor_readings):
     B_meas = np.zeros((3, N))
 
     for i, reading in enumerate(sensor_readings):
-        sensor_id = reading.id
-        group = get_sensor_group(sensor_id)
-
-        if group is not None and group in R_CORR:
-            # Apply rotation correction
-            b_raw = np.array([reading.x, reading.y, reading.z])
-            # meas frame to sensor frame {s}{m}_R_CORR {m}{s}_R_CORR
-            b_corrected = R_CORR[group] @ b_raw
-            # Unit conversion: Gs -> Tesla
-            B_meas[:, i] = b_corrected * GS_TO_TESLA
-        else:
-            print(f"[WARN] Unknown sensor id: {sensor_id}")
+        # Data from stm_uplink is already R_CORR-corrected (applied in serial_processor)
+        # Just do unit conversion: Gs -> Tesla
+        b_corrected = np.array([reading.x, reading.y, reading.z])
+        B_meas[:, i] = b_corrected * GS_TO_TESLA
 
     return B_meas
 
@@ -451,12 +325,6 @@ def handle_localize_cycle(req):
             if mode == 'CVT' and B0 is not None:
                 B_meas = B_meas - B0
 
-            # Apply per-sensor C matrix calibration (b_bias not used yet)
-            for i, reading in enumerate(slot.sensor_data):
-                sid = reading.id
-                if sid in CALIB_C:
-                    B_meas[:, i] = CALIB_C[sid] @ B_meas[:, i] + CALIB_B_BIAS[sid]
-
             B_meas_cell.append(B_meas)
 
         D_cal = build_D_cal(sensor_ids)
@@ -529,6 +397,12 @@ def main():
 
     rospy.init_node('gels_localization_service')
     rospy.loginfo("GELS Localization service started (FRAMEWORK MODE)")
+
+    # Initialize sensor config from rosparam
+    global _SENSOR_TYPE, _SENSOR_CONFIG
+    _SENSOR_TYPE = rospy.get_param('~sensor_type', 'QMC6309')
+    _SENSOR_CONFIG = get_config(_SENSOR_TYPE)
+    rospy.loginfo(f"Using sensor type: {_SENSOR_TYPE}")
 
     # Load configuration
     load_configuration()
