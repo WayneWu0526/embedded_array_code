@@ -23,13 +23,15 @@ from datetime import datetime
 from geometry_msgs.msg import Pose, Quaternion
 from tf.transformations import quaternion_from_euler, euler_from_quaternion
 from serial_processor.msg import StmUplink
+from sensor_array_config import get_config, SensorArrayConfig
 
 
 class EllipsoidCalibrationSampler:
     def __init__(self):
-        moveit_commander.roscpp_initialize(sys.argv)
         rospy.init_node('ellipsoid_calibration_sampler', anonymous=True)
 
+        # Normal measurement mode
+        moveit_commander.roscpp_initialize(sys.argv)
         self.robot = moveit_commander.RobotCommander()
 
         # Parameters
@@ -62,8 +64,15 @@ class EllipsoidCalibrationSampler:
 
         # Sensor collection parameters
         self.num_samples = rospy.get_param('~num_samples', 10)
+        self.num_poses = rospy.get_param('~num_poses', 500)
         self.settling_time = rospy.get_param('~settling_time', 0.5)
         self.skip_poses = rospy.get_param('~skip_poses', 0)
+
+        # Load sensor array configuration
+        self._sensor_type = rospy.get_param('~sensor_type', 'QMC6309')
+        self._sensor_config: SensorArrayConfig = get_config(self._sensor_type)
+        self._n_sensors = self._sensor_config.manifest.n_sensors
+        rospy.loginfo(f"Using sensor type: {self._sensor_type}, n_sensors={self._n_sensors}")
 
         # Sensor data state
         self.latest_sensor_data = None
@@ -114,7 +123,7 @@ class EllipsoidCalibrationSampler:
 
         # Generate orientations: Rx, Ry pairs using Fibonacci hemisphere
         # Each (Rx, Ry) will have joint7 sweep through 180 degrees
-        self.test_angles = self._generate_rxry_hemisphere(num_poses=50)
+        self.test_angles = self._generate_rxry_hemisphere(num_poses=self.num_poses)
 
         # Setup CSV output
         result = self._setup_csv()
@@ -127,9 +136,11 @@ class EllipsoidCalibrationSampler:
         # Execute orientation test with data collection
         self.run_orientation_test()
 
-        # Close CSV and cleanup
+        # Close CSV
+        csv_name = self.csv_file.name
         self.csv_file.close()
         rospy.loginfo("Data collection complete.")
+        rospy.loginfo(f"CSV saved: {csv_name}")
 
         rospy.signal_shutdown("done")
 
@@ -444,7 +455,7 @@ class EllipsoidCalibrationSampler:
         Returns:
             dict: Averaged sensor data {sensor_id: (x, y, z), ...}
         """
-        samples = {i: [] for i in range(1, 13)}  # sensors 1-12
+        samples = {i: [] for i in range(1, self._n_sensors + 1)}  # sensors 1-N
         collected = 0
 
         rate = rospy.Rate(100)  # 100Hz polling
@@ -455,7 +466,7 @@ class EllipsoidCalibrationSampler:
                 if self.latest_sensor_data is not None:
                     msg = self.latest_sensor_data
                     for sensor in msg.sensor_data:
-                        if 1 <= sensor.id <= 12:
+                        if 1 <= sensor.id <= self._n_sensors:
                             samples[sensor.id].append((sensor.x, sensor.y, sensor.z))
                     collected += 1
             rate.sleep()
@@ -496,7 +507,7 @@ class EllipsoidCalibrationSampler:
             header = ['timestamp',
                      'pos_x', 'pos_y', 'pos_z',
                      'qx', 'qy', 'qz', 'qw']
-            for i in range(1, 13):
+            for i in range(1, self._n_sensors + 1):
                 header.extend([f'sensor_{i}_x', f'sensor_{i}_y', f'sensor_{i}_z'])
             writer.writerow(header)
 
@@ -515,12 +526,13 @@ class EllipsoidCalibrationSampler:
             f"{pose.orientation.x:.4f}", f"{pose.orientation.y:.4f}",
             f"{pose.orientation.z:.4f}", f"{pose.orientation.w:.4f}"
         ]
-        for i in range(1, 13):
+        for i in range(1, self._n_sensors + 1):
             if i in sensor_data:
                 x, y, z = sensor_data[i]
-                row.extend([f"{x:.2f}", f"{y:.2f}", f"{z:.2f}"])
+                # Use .7g to preserve float32 precision (~7 significant figures)
+                row.extend([f"{x:.7g}", f"{y:.7g}", f"{z:.7g}"])
             else:
-                row.extend(["0.00", "0.00", "0.00"])
+                row.extend(["0.0", "0.0", "0.0"])
 
         self.csv_writer.writerow(row)
         self.csv_file.flush()  # Ensure data is written immediately
