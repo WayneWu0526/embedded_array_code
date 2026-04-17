@@ -19,7 +19,6 @@ import glob
 import os
 import json
 import numpy as np
-import rospkg
 from std_msgs.msg import Header, Float32MultiArray
 from serial_processor.msg import SensorData, StmUplink, StmDownlink
 from sensor_array_config import get_config, SensorArrayConfig
@@ -31,7 +30,6 @@ class SerialNodeTDM:
     TERMINATOR = b'\r\n'
     UPLINK_MIN_SIZE = 17  # Header(2) + Version(1) + cycle_id(2) + slot(1) + Bitmap(2) + Timestamp(8) + cycle_end(1)
     SENSOR_DATA_SIZE = 7  # SensorID(1) + X(2) + Y(2) + Z(2)
-    SCALE_FACTOR = 32.0 / 32768.0  # STM32 sends 16-bit signed int, scale to actual value
 
     def __init__(self):
         rospy.init_node('serial_node_tdm', anonymous=True)
@@ -51,7 +49,6 @@ class SerialNodeTDM:
 
         # Serial connection
         self.ser = None
-        self.data_lock = threading.Lock()
         self.connect()
 
         # Publisher for uplink data (corrected: ellipsoid + R_CORR)
@@ -128,10 +125,6 @@ class SerialNodeTDM:
             self.correction = {}
             self.D_matrix = {}
             self.e_bias = {}
-
-    def _get_sensor_group(self, sensor_id):
-        """Get rotation correction group for sensor id (1-indexed). Uses config."""
-        return self._sensor_to_group.get(sensor_id)
 
     def _load_sensor_array_params(self):
         """Load d_list and R_CORR from SensorArrayConfig."""
