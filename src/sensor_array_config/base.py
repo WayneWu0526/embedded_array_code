@@ -129,6 +129,12 @@ class SensorArrayConfig(ABC):
         end = start + self.manifest.sensors_per_group
         return list(range(start, end))
 
+# ---------- sensor type enum ----------
+from enum import Enum
+
+class SensorType(Enum):
+    QMC6309 = "QMC6309"
+
 # ---------- registry ----------
 _REGISTRY: Dict[str, type] = {}
 
