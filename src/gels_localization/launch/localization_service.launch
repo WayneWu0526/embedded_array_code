@@ -1,7 +1,12 @@
 <launch>
+  <!-- Arguments -->
+  <arg name="sensor_type" default="QMC6309"/>
+
   <!-- Load sensor calibration parameters -->
   <rosparam file="$(find sensor_data_collection)/config/sensor_calibration.yaml" command="load" ns="gels_localization"/>
 
   <!-- Start localization service -->
-  <node name="gels_localization_service" pkg="gels_localization" type="localization_service_node.py" output="screen"/>
+  <node name="gels_localization_service" pkg="gels_localization" type="localization_service_node.py" output="screen">
+    <param name="sensor_type" value="$(arg sensor_type)"/>
+  </node>
 </launch>

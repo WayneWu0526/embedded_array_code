@@ -5,6 +5,7 @@
   <!-- Arguments -->
   <arg name="port" default="/dev/ttyACM"/>
   <arg name="baudrate" default="921600"/>
+  <arg name="sensor_type" default="QMC6309"/>
   <arg name="sensor_float_endian" default="little"/>
 
   <!-- Hall Sensor Serial Node (TDM Binary Protocol) - Manual Mode -->
@@ -12,6 +13,7 @@
     <param name="port" value="$(arg port)"/>
     <param name="baudrate" value="$(arg baudrate)"/>
     <param name="sensor_float_endian" value="$(arg sensor_float_endian)"/>
+    <param name="sensor_type" value="$(arg sensor_type)"/>
   </node>
 
   <!-- Auto-send manual mode initialization command -->

@@ -24,6 +24,9 @@
         Note: No FY8300 signal generator is used - sensor collects ambient magnetic field.
     -->
 
+    <!-- Arguments -->
+    <arg name="sensor_type" default="QMC6309"/>
+
     <!-- Start diana7 robot arm (hardware + MoveIt, no RViz, with magnetometer_array tool) -->
     <include file="$(find zlab_robots_bringup)/launch/diana7/diana7_bringup.launch">
         <arg name="use_rviz" value="false"/>
@@ -32,7 +35,9 @@
     </include>
 
     <!-- Start STM32 and sensor data collection (manual mode - no FY8300) -->
-    <include file="$(find sensor_data_collection)/launch/stm32_manual.launch"/>
+    <include file="$(find sensor_data_collection)/launch/stm32_manual.launch">
+      <arg name="sensor_type" value="$(arg sensor_type)"/>
+    </include>
 
     <!--
         Ellipsoid calibration sampler parameters:
@@ -40,9 +45,10 @@
         num_poses: Number of orientation poses to collect (default: 500)
         num_samples: Number of sensor samples to average per pose (default: 10)
         settling_time: Wait time after movement for vibrations to settle (default: 0.5s)
-        speed_scaling: MoveIt speed factor for safety (default: 0.1)
-        output_dir: Directory to save CSV files
+        speed_scaling: MoveIt speed factor for safety (default: 0.08)
         connect_wait_time: Time to wait for MoveIt to initialize (default: 5.0)
+        max_retries: Max connection retries to move_group (default: 3)
+        skip_poses: Skip first N poses (for resume, default: 0)
     -->
     <node
         name="ellipsoid_calibration_sampler"
@@ -51,10 +57,14 @@
         output="screen"
         required="False"
     >
+        <param name="num_poses" value="500"/>
+        <param name="num_samples" value="10"/>
         <param name="settling_time" value="0.5"/>
         <param name="speed_scaling" value="0.08"/>
         <param name="connect_wait_time" value="5.0"/>
+        <param name="max_retries" value="3"/>
         <param name="skip_poses" value="0"/>
+        <param name="sensor_type" value="$(arg sensor_type)"/>
     </node>
 
 </launch>
