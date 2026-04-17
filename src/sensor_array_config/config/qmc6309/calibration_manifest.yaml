@@ -1,0 +1,7 @@
+sensor_type: "QMC6309"
+bit_width: 16
+range_gs: 500.0
+n_sensors: 12
+n_groups: 4
+sensors_per_group: 3
+gs_to_tesla: 1.0e-4
