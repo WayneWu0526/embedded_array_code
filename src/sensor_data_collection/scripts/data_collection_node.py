@@ -24,6 +24,7 @@ from serial_processor.srv import GetHallData, GetHallDataResponse
 from std_msgs.msg import Bool, Float64
 from sensor_data_collection.msg import SlotData, SensorReading
 from sensor_data_collection.srv import LocalizeCycle, LocalizeCycleRequest
+from sensor_array_config import get_config, SensorArrayConfig
 
 
 # Mode constants
@@ -31,11 +32,9 @@ MODE_CVT = 0x01  # Constant Voltage Mode: 4 slots
 MODE_CCI = 0x02  # Constant Current Mode: 3 slots
 MODE_MANUAL = 0x00  # Manual trigger mode (continuous data)
 
-# Mode to slot count
-MODE_SLOT_COUNT = {
-    MODE_CVT: 4,
-    MODE_CCI: 3,
-}
+# Mode to slot count - now computed per-instance from sensor config in DataCollector.__init__()
+# Format: {MODE_CVT: n_groups + 1 (background slot), MODE_CCI: n_groups}
+# Kept as fallback default for CycleBuffer before sensor config is available
 
 
 class SlotBuffer:
@@ -52,21 +51,21 @@ class SlotBuffer:
 class CycleBuffer:
     """Buffer for a complete cycle's data"""
 
-    def __init__(self, cycle_id, mode, bitmap=0x0FFF):
+    def __init__(self, cycle_id, mode, bitmap=0x0FFF, num_slots=None, n_sensors=12):
         self.cycle_id = cycle_id
         self.mode = mode
         self.bitmap = bitmap
-        self.num_slots = MODE_SLOT_COUNT.get(mode, 4)
+        self.num_slots = num_slots if num_slots is not None else 4
+        self.n_sensors = n_sensors
         self.slots = {}  # slot -> SlotBuffer
         self.ground_truth_pose = None
         self.stm_timestamp = None
         self.pc_timestamp = None
 
-    @staticmethod
-    def _parse_bitmap(bitmap):
+    def _parse_bitmap(self, bitmap):
         """Parse bitmap to list of sensor IDs (1-indexed)"""
         sensor_ids = []
-        for i in range(12):
+        for i in range(self.n_sensors):
             if bitmap & (1 << i):
                 sensor_ids.append(i + 1)
         return sensor_ids
@@ -131,6 +130,17 @@ class DataCollector:
         # Check if running in manual trigger mode
         self.manual_trigger = rospy.get_param('~manual_trigger', False)
 
+        # Load sensor array configuration
+        self._sensor_type = rospy.get_param('~sensor_type', 'QMC6309')
+        self._sensor_config: SensorArrayConfig = get_config(self._sensor_type)
+        rospy.loginfo(f"Using sensor type: {self._sensor_type}, n_sensors={self._sensor_config.manifest.n_sensors}")
+
+        # Compute MODE_SLOT_COUNT from config
+        self._MODE_SLOT_COUNT = {
+            MODE_CVT: self._sensor_config.manifest.n_groups + 1,
+            MODE_CCI: self._sensor_config.manifest.n_groups,
+        }
+
         # Parameters
         self.num_cycles = int(rospy.get_param('~num_cycles', 10))
         if self.num_cycles < 0:
@@ -150,7 +160,8 @@ class DataCollector:
             self.mode = MODE_CCI
         else:
             self.mode = MODE_CVT
-        self.bitmap = int(rospy.get_param('~bitmap', 0x0FFF))  # All 12 sensors
+        all_sensors_bitmap = (1 << self._sensor_config.manifest.n_sensors) - 1
+        self.bitmap = int(rospy.get_param('~bitmap', all_sensors_bitmap))
         self.settling_time = int(rospy.get_param('~settling_time', 10000))  # 0.01ms units
         self.sampling_time = int(rospy.get_param('~sampling_time', 1400))  # 0.01ms units
         if self.sampling_time < 1400:
@@ -160,7 +171,7 @@ class DataCollector:
         # Manual mode specific parameters
         if self.manual_trigger:
             # num_positions: CVT=4 slots, CCI=3 slots, can be overridden
-            self.num_positions = int(rospy.get_param('~num_positions', 4 if self.mode == MODE_CVT else 3))
+            self.num_positions = int(rospy.get_param('~num_positions', self._MODE_SLOT_COUNT[self.mode]))
             self.num_frames_to_average = int(rospy.get_param('~num_frames_to_average', 10))
             # Load manual mode slot->frame mapping
             raw_manual_map = rospy.get_param('~manual_slot_frame_mapping', {})
@@ -180,7 +191,7 @@ class DataCollector:
             self.slot_buffers = [deque(maxlen=self.num_frames_to_average) for _ in range(self.num_positions)]
         else:
             # Calculate cycle_time: CVT=4 slots, CCI=3 slots
-            num_slots = 4 if self.mode == MODE_CVT else 3
+            num_slots = self._MODE_SLOT_COUNT[self.mode]
             self.cycle_time = num_slots * (self.settling_time + self.sampling_time)
             # Auto mode uses CVT/CCI mode for STM32
             self.stm_mode = self.mode
@@ -539,7 +550,7 @@ class DataCollector:
                 'cycle_id': self.cycle_id,
                 'mode': mode_str,
                 'num_slots': self.num_positions,
-                'sensor_ids': list(range(1, 13)),  # All 12 sensors
+                'sensor_ids': list(range(1, self._sensor_config.manifest.n_sensors + 1)),  # All sensors
                 'num_frames_averaged': self.num_frames_to_average
             },
             'pc_timestamp': rospy.Time.now().to_sec(),
@@ -650,7 +661,11 @@ class DataCollector:
 
         # Check if we need to start a new cycle
         if self.current_cycle is None or self.current_cycle.cycle_id != cycle_id:
-            self.current_cycle = CycleBuffer(cycle_id, self.mode, self.bitmap)
+            self.current_cycle = CycleBuffer(
+                cycle_id, self.mode, self.bitmap,
+                num_slots=self._MODE_SLOT_COUNT[self.mode],
+                n_sensors=self._sensor_config.manifest.n_sensors
+            )
 
         # Create slot buffer
         slot_buffer = SlotBuffer(
