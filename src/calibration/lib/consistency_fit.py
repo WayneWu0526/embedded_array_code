@@ -19,8 +19,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, asdict
 
-from sensor_array_config import get_config, SensorArrayConfig
-from sensor_array_config.base import ConsistencyParamsSet, ConsistencyParams
+from sensor_array_config.base import get_config, SensorArrayConfig, ConsistencyParamsSet, ConsistencyParams
 
 
 # ============== 场条件枚举 ==============
