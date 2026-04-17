@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, asdict
 
+from sensor_array_config import get_config, SensorArrayConfig
+from sensor_array_config.base import ConsistencyParamsSet, ConsistencyParams
+
 
 # ============== 场条件枚举 ==============
 class FieldCondition:
@@ -57,56 +60,24 @@ class ConsistencyResult:
 
 
 # ============== 数据加载 ==============
-def load_ellipsoid_params(params_path: Path = None) -> Tuple[Dict[int, np.ndarray], Dict[int, np.ndarray]]:
-    """
-    加载椭球校正参数 (o_i, C_i)
-
-    Args:
-        params_path: 可选，指定 intrinsic_params.json 路径
-
-    Returns:
-        (o_i dict, C_i dict): sensor_id -> offset/校正矩阵
-    """
-    if params_path is None:
-        # 默认搜索路径
-        search_paths = [
-            Path(__file__).parent.parent.parent.parent / 'serial_processor' / 'config' / 'intrinsic_params.json',
-            Path(__file__).parent.parent.parent.parent / 's1_ellipsoid_fit' / 'result' / 'intrinsic_params_handheld_200753.json',
-            Path(__file__).parent.parent.parent.parent / 's1_ellipsoid_fit' / 'result' / 'intrinsic_params_ellipsoid_calib_20260414_150317.json',
-            Path(__file__).parent.parent.parent.parent / 's1_ellipsoid_fit' / 'result' / 'intrinsic_params.json',
-        ]
-        for f in search_paths:
-            if f.exists():
-                params_path = f
-                break
-        else:
-            raise FileNotFoundError("No ellipsoid intrinsic params found!")
-
-    with open(params_path, 'r', encoding='utf-8') as f:
-        params = json.load(f)
-
-    o_i = {s['sensor_id']: np.array(s['o_i']) for s in params['sensors']}
-    C_i = {s['sensor_id']: np.array(s['C_i']) for s in params['sensors']}
-    return o_i, C_i
-
-
-def load_csv_data(csv_path: Path) -> np.ndarray:
+def load_csv_data(csv_path: Path, n_sensors: int = 12) -> np.ndarray:
     """
     加载 CSV 并提取传感器数据
 
     Args:
         csv_path: CSV 文件路径
+        n_sensors: 传感器数量
 
     Returns:
-        data: (N_samples, 12, 3) 原始数据
+        data: (N_samples, n_sensors, 3) 原始数据
     """
     import pandas as pd
     df = pd.read_csv(csv_path)
     cols = [c for c in df.columns if c.startswith('sensor_')]
     data = df[cols].values
     n = data.shape[0]
-    reshaped = np.zeros((n, 12, 3))
-    for i in range(12):
+    reshaped = np.zeros((n, n_sensors, 3))
+    for i in range(n_sensors):
         reshaped[:, i, :] = data[:, i*3:(i+1)*3]
     return reshaped
 
@@ -129,11 +100,11 @@ def compute_stable_mean(data: np.ndarray, skip: int = 5) -> np.ndarray:
 
 
 # ============== 核心算法 ==============
-def fit_D_and_e(b_norm_dict: Dict[int, np.ndarray]) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+def fit_D_and_e(b_norm_dict: Dict[int, np.ndarray], n_sensors: int = 12) -> Tuple[List[np.ndarray], List[np.ndarray]]:
     """
     拟合缩放矩阵 D_i 和残余偏置 e_i
 
-    Phase 2 核心算法：使 12 颗传感器在各个磁场方向上响应一致。
+    Phase 2 核心算法：使 n_sensors 颗传感器在各个磁场方向上响应一致。
 
     原理：
     - 在某一磁场方向上，阵列平均增量为 delta_bar
@@ -141,14 +112,14 @@ def fit_D_and_e(b_norm_dict: Dict[int, np.ndarray]) -> Tuple[List[np.ndarray], L
     - 比例系数即为 D_i 的元素（D_i 为完整 3x3 矩阵，可校正交叉轴耦合）
 
     Args:
-        b_norm_dict: {condition: (12, 3)} 椭球校正后的数据
+        b_norm_dict: {condition: (n_sensors, 3)} 椭球校正后的数据
+        n_sensors: 传感器数量
 
     Returns:
-        D_list: [D_1, ..., D_12], 每个 D_i 为 3x3 矩阵
-        e_list: [e_1, ..., e_12], 每个 e_i ∈ ℝ³
+        D_list: [D_1, ..., D_n], 每个 D_i 为 3x3 矩阵
+        e_list: [e_1, ..., e_n], 每个 e_i ∈ ℝ³
     """
     conditions = FieldCondition.all_conditions()
-    n_sensors = 12
 
     # Step 1: 计算每颗传感器在每个条件下的增量
     delta = {}
@@ -225,18 +196,26 @@ def apply_consistency_correction(b_ellipsoid: np.ndarray, D_i: np.ndarray, e_i: 
 def consistency_fit(
     csv_dir: Path,
     data_files: Dict[str, str] = None,
+    sensor_config: SensorArrayConfig = None,
 ) -> Tuple[List[np.ndarray], List[np.ndarray], Dict]:
     """
     执行一致性校准（单次调用完成全部计算）
 
+    注意: 输入数据应为已经过椭球校正和旋转校正的数据。
+    不再自动加载椭球参数，需在数据采集阶段确保使用校正后的数据。
+
     Args:
         csv_dir: CSV 文件所在目录
-        ellipsoid_params_path: 可选，指定椭球参数 JSON 路径
         data_files: 可选，自定义数据文件映射
+        sensor_config: 可选，传感器配置对象
 
     Returns:
         (D_list, e_list, fit_info)
     """
+    if sensor_config is None:
+        sensor_config = get_config("QMC6309")
+    n_sensors = sensor_config.manifest.n_sensors
+
     if data_files is None:
         data_files = {
             'background': 'consistency_calib_background.csv',
@@ -265,16 +244,16 @@ def consistency_fit(
         if not csv_path.exists():
             raise FileNotFoundError(f"CSV not found: {csv_path}")
 
-        sensors_raw = load_csv_data(csv_path)
+        sensors_raw = load_csv_data(csv_path, n_sensors)
         # 数据已经是 ellipsoid + rotation 校正后的，直接使用
         b_norm_means[condition_map[name]] = compute_stable_mean(sensors_raw)
 
     # 拟合 D_i 和 e_i
-    D_list, e_list = fit_D_and_e(b_norm_means)
+    D_list, e_list = fit_D_and_e(b_norm_means, n_sensors)
 
     fit_info = {
         'method': 'relative_consistency_fit',
-        'n_sensors': 12,
+        'n_sensors': n_sensors,
         'conditions': ['ZERO', 'POS_X', 'NEG_X', 'POS_Y', 'NEG_Y', 'POS_Z', 'NEG_Z'],
     }
 
@@ -284,6 +263,7 @@ def consistency_fit(
 def batch_consistency_fit(
     csv_dir: Path,
     output_path: Path = None,
+    sensor_config: SensorArrayConfig = None,
 ) -> List[ConsistencyResult]:
     """
     批量处理一致性校准，返回完整结果
@@ -291,14 +271,19 @@ def batch_consistency_fit(
     Args:
         csv_dir: CSV 文件所在目录
         output_path: 可选，输出 JSON 路径
+        sensor_config: 可选，传感器配置对象
 
     Returns:
-        List of ConsistencyResult for all 12 sensors
+        List of ConsistencyResult for all n_sensors sensors
     """
-    D_list, e_list, fit_info = consistency_fit(csv_dir)
+    if sensor_config is None:
+        sensor_config = get_config("QMC6309")
+    n_sensors = sensor_config.manifest.n_sensors
+
+    D_list, e_list, fit_info = consistency_fit(csv_dir, data_files=None, sensor_config=sensor_config)
 
     results = []
-    for i in range(12):
+    for i in range(n_sensors):
         result = ConsistencyResult(
             sensor_id=i + 1,
             csv_file=str(csv_dir),
@@ -311,7 +296,7 @@ def batch_consistency_fit(
 
     # 保存参数
     if output_path is not None:
-        save_consistency_params(results, output_path)
+        save_consistency_params(results, output_path, sensor_config)
 
     return results
 
@@ -320,13 +305,24 @@ def validate_consistency(
     csv_dir: Path,
     D_list: List[np.ndarray],
     e_list: List[np.ndarray],
+    sensor_config: SensorArrayConfig = None,
 ) -> Dict:
     """
     验证一致性校正效果
 
+    Args:
+        csv_dir: CSV 文件所在目录
+        D_list: D_i 矩阵列表
+        e_list: e_i 向量列表
+        sensor_config: 可选，传感器配置对象
+
     Returns:
         包含校正前后标准差对比的字典
     """
+    if sensor_config is None:
+        sensor_config = get_config("QMC6309")
+    n_sensors = sensor_config.manifest.n_sensors
+
     data_files = {
         'background': 'consistency_calib_background.csv',
         'ch1_positive': 'consistency_calib_ch1_positive.csv',
@@ -353,7 +349,7 @@ def validate_consistency(
         csv_path = Path(csv_dir) / filename
         if not csv_path.exists():
             continue
-        sensors_raw = load_csv_data(csv_path)
+        sensors_raw = load_csv_data(csv_path, n_sensors)
         b_norm_means[condition_map[name]] = compute_stable_mean(sensors_raw)
 
     conditions = [FieldCondition.ZERO] + FieldCondition.all_conditions()
@@ -362,7 +358,7 @@ def validate_consistency(
     for cond in conditions:
         before = b_norm_means[cond]
         after = np.stack([apply_consistency_correction(before[s-1], D_list[s-1], e_list[s-1])
-                         for s in range(1, 13)])
+                         for s in range(1, n_sensors + 1)])
 
         for axis, axis_name in enumerate(['X', 'Y', 'Z']):
             std_b = float(np.std(before[:, axis]))
@@ -377,37 +373,41 @@ def validate_consistency(
     return validation
 
 
-def save_consistency_params(results: List[ConsistencyResult], output_path: Path):
+def save_consistency_params(
+    results: List[ConsistencyResult],
+    output_path: Path,
+    sensor_config: SensorArrayConfig = None,
+):
     """保存一致性校准参数到 JSON 文件"""
-    output_data = {
-        'version': '1.0',
-        'description': 'Phase 2 consistency calibration parameters (D_i, e_i)',
-        'calibration_method': 'relative_consistency_fit',
-        'n_sensors': 12,
-        'sensors': [r.to_dict() for r in results]
-    }
-
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(output_data, f, indent=2, ensure_ascii=False)
-
+    if sensor_config is None:
+        sensor_config = get_config("QMC6309")
+    params_set = ConsistencyParamsSet(params={
+        r.sensor_id: ConsistencyParams(D_i=r.D_i, e_i=r.e_i)
+        for r in results
+    })
+    params_set.to_json(str(output_path))
     print(f"Consistency params saved to: {output_path}")
 
 
-def load_consistency_params(params_path: Path) -> Tuple[Dict[int, np.ndarray], Dict[int, np.ndarray]]:
+def load_consistency_params(
+    params_path: Path,
+    sensor_config: SensorArrayConfig = None,
+) -> Tuple[Dict[int, np.ndarray], Dict[int, np.ndarray]]:
     """
     从 JSON 文件加载一致性校准参数
+
+    Args:
+        params_path: 参数文件路径
+        sensor_config: 可选，传感器配置对象
 
     Returns:
         (D_dict, e_dict): sensor_id -> 矩阵/向量
     """
-    with open(params_path, 'r', encoding='utf-8') as f:
-        params = json.load(f)
-
-    D_dict = {s['sensor_id']: np.array(s['D_i']) for s in params['sensors']}
-    e_dict = {s['sensor_id']: np.array(s['e_i']) for s in params['sensors']}
+    if sensor_config is None:
+        sensor_config = get_config("QMC6309")
+    params_set = ConsistencyParamsSet.from_json(str(params_path))
+    D_dict = {sid: np.array(p.D_i) for sid, p in params_set.params.items()}
+    e_dict = {sid: np.array(p.e_i) for sid, p in params_set.params.items()}
     return D_dict, e_dict
 
 
@@ -433,8 +433,6 @@ Examples:
                         help='Directory containing consistency CSV files')
     parser.add_argument('-o', '--output', dest='output_path',
                         help='Output JSON path (default: serial_processor/config/consistency_params.json)')
-    parser.add_argument('-e', '--ellipsoid-params', dest='ellipsoid_params',
-                        help='Path to ellipsoid intrinsic_params.json')
     parser.add_argument('--validate', action='store_true',
                         help='Run validation after fitting')
     parser.add_argument('--no-save', action='store_true',
@@ -450,7 +448,7 @@ Examples:
 
     # Default output (only used when --no-save is NOT set)
     if args.output_path is None:
-        output_path = Path(__file__).parent.parent.parent.parent / 'serial_processor' / 'config' / 'consistency_params.json'
+        output_path = Path(__file__).parent.parent.parent.parent / 'sensor_array_config' / 'config' / 'QMC6309' / 'consistency_params.json'
     else:
         output_path = Path(args.output_path)
 
@@ -462,22 +460,17 @@ Examples:
         print(f"  Output:    (disabled by --no-save)")
     else:
         print(f"  Output:    {output_path}")
-    if args.ellipsoid_params:
-        print(f"  Ellipsoid: {args.ellipsoid_params}")
     print()
 
     if not csv_dir.exists():
         print(f"[ERROR] CSV directory not found: {csv_dir}")
         sys.exit(1)
 
-    # Load ellipsoid params if specified
-    ellipsoid_params_path = Path(args.ellipsoid_params) if args.ellipsoid_params else None
-
     # Determine output path (None if --no-save)
     save_path = None if args.no_save else output_path
 
     # Run consistency fit
-    results = batch_consistency_fit(csv_dir, save_path, ellipsoid_params_path)
+    results = batch_consistency_fit(csv_dir, save_path, sensor_config=get_config("QMC6309"))
 
     # Print fitted parameters
     print("\n  Fitted parameters:")
@@ -496,7 +489,7 @@ Examples:
     print("=" * 70)
     D_list = [np.array(r.D_i) for r in results]
     e_list = [np.array(r.e_i) for r in results]
-    validation = validate_consistency(csv_dir, D_list, e_list, ellipsoid_params_path)
+    validation = validate_consistency(csv_dir, D_list, e_list)
 
     print(f"\n  Dispersion (std of 12 sensors):")
     print("  " + "-" * 55)
