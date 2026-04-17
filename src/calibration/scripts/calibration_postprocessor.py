@@ -36,6 +36,7 @@ script_dir = Path(__file__).parent
 src_root = script_dir.parent.parent
 sys.path.insert(0, str(src_root))
 
+from sensor_array_config import get_config, SensorArrayConfig
 from calibration.lib.ellipsoid_fit import ellipsoid_fit, load_calibration_params
 from calibration.lib.consistency_fit import (
     consistency_fit,
@@ -69,22 +70,24 @@ class CalibrationPostProcessor:
     and outputs results to config/intrinsic_params.json.
     """
 
-    def __init__(self, csv_path: str, calibration_type: str = 'ellipsoid'):
+    def __init__(self, csv_path: str, calibration_type: str = 'ellipsoid', sensor_type: str = 'QMC6309'):
         """
         Initialize the post-processor.
 
         Args:
             csv_path: Path to the CSV file created by sampling
             calibration_type: 'ellipsoid' or 'handheld'
+            sensor_type: Sensor type name, used as subdirectory under sensor_array_config/config/
         """
         self.csv_path = Path(csv_path)
         self.calibration_type = calibration_type
+        self.sensor_type = sensor_type
+        self._sensor_config = get_config(sensor_type)
 
         # Setup paths
         self.project_dir = script_dir.parent
         self.report_dir = self.project_dir / 'report'
-        self.serial_processor_dir = src_root / 'serial_processor'
-        self.config_dir = self.serial_processor_dir / 'config'
+        self.config_dir = src_root / 'sensor_array_config' / 'config' / self.sensor_type
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.report_dir.mkdir(parents=True, exist_ok=True)
 
@@ -112,7 +115,7 @@ class CalibrationPostProcessor:
         print(f"{'传感器':^6} {'ratio':^8} {'改善倍数':^10} {'radius_std: 校正前 → 校正后'}")
         print("-" * 70)
 
-        for sensor_id in range(1, 13):
+        for sensor_id in self._sensor_config.get_sensor_ids():
             col_x = f'sensor_{sensor_id}_x'
             col_y = f'sensor_{sensor_id}_y'
             col_z = f'sensor_{sensor_id}_z'
@@ -142,25 +145,13 @@ class CalibrationPostProcessor:
 
     def _save_intrinsic_params(self):
         """Save intrinsic parameters to config/intrinsic_params.json (overwrite)."""
-        intrinsic_params = {
-            'version': '1.0',
-            'description': 'QMC6309 12-sensor intrinsic calibration parameters (o_i, C_i)',
-            'source_file': f'{self.csv_name}.csv',
-            'calibration_type': self.calibration_type,
-            'sensors': []
-        }
-
-        for r in self.results:
-            intrinsic_params['sensors'].append({
-                'sensor_id': r.sensor_id,
-                'o_i': r.o_i,
-                'C_i': r.C_i
-            })
-
+        from sensor_array_config.base import IntrinsicParamsSet, IntrinsicParams
+        params_set = IntrinsicParamsSet(params={
+            r.sensor_id: IntrinsicParams(o_i=r.o_i, C_i=r.C_i)
+            for r in self.results
+        })
         config_file = self.config_dir / 'intrinsic_params.json'
-        with open(config_file, 'w', encoding='utf-8') as f:
-            json.dump(intrinsic_params, f, indent=2, ensure_ascii=False)
-
+        params_set.to_json(str(config_file))
         print(f"\n内参已保存: {config_file}")
 
     def _save_calibration_results(self):
@@ -214,7 +205,7 @@ class ConsistencyPostProcessor:
     and outputs results to serial_processor/config/consistency_params.json.
     """
 
-    def __init__(self, csv_dir: str = None, calibration_type: str = 'consistency'):
+    def __init__(self, csv_dir: str = None, calibration_type: str = 'consistency', sensor_type: str = 'QMC6309'):
         """
         Initialize the post-processor.
 
@@ -222,14 +213,16 @@ class ConsistencyPostProcessor:
             csv_dir: Path to directory containing consistency CSV files.
                      Defaults to calibration/data/consistency/
             calibration_type: 'consistency' (only option for now)
+            sensor_type: Sensor type name, used as subdirectory under sensor_array_config/config/
         """
         self.project_dir = script_dir.parent
         self.csv_dir = Path(csv_dir) if csv_dir else self.project_dir / 'data' / 'consistency'
         self.calibration_type = calibration_type
+        self.sensor_type = sensor_type
+        self._sensor_config = get_config(sensor_type)
 
-        # Output: serial_processor/config/consistency_params.json
-        self.serial_processor_dir = src_root / 'serial_processor'
-        self.config_dir = self.serial_processor_dir / 'config'
+        # Output: sensor_array_config/config/{sensor_type}/consistency_params.json
+        self.config_dir = src_root / 'sensor_array_config' / 'config' / self.sensor_type
         self.config_dir.mkdir(parents=True, exist_ok=True)
 
         self.results = []
@@ -262,7 +255,7 @@ class ConsistencyPostProcessor:
         print("\n[Step 1] 执行一致性校准...")
         print("-" * 70)
 
-        D_list, e_list, fit_info = consistency_fit(self.csv_dir)
+        D_list, e_list, fit_info = consistency_fit(self.csv_dir, sensor_config=self._sensor_config)
 
         # ========== Step 2: Print results ==========
         print("\n  拟合参数:")
@@ -291,7 +284,7 @@ class ConsistencyPostProcessor:
         print("  " + "-" * 55)
 
         try:
-            validation = validate_consistency(self.csv_dir, D_list, e_list)
+            validation = validate_consistency(self.csv_dir, D_list, e_list, sensor_config=self._sensor_config)
             for i in range(len(validation['conditions'])):
                 cond = validation['conditions'][i]
                 axis = validation['axes'][i]
@@ -305,7 +298,7 @@ class ConsistencyPostProcessor:
         # ========== Step 4: Save params ==========
         print("\n[Step 3] 保存参数...")
         output_file = self.config_dir / 'consistency_params.json'
-        save_consistency_params(results, output_file)
+        save_consistency_params(results, output_file, sensor_config=self._sensor_config)
 
         print("\n" + "=" * 70)
         print("Phase 2 校准完成!")
@@ -326,20 +319,24 @@ if __name__ == '__main__':
     ellipsoid_parser.add_argument('--type', '-t', default='ellipsoid',
                                   choices=['ellipsoid', 'handheld'],
                                   help='Calibration type')
+    ellipsoid_parser.add_argument('--sensor-type', '-s', default='QMC6309',
+                                  help='Sensor array type (default: QMC6309)')
 
     # Phase 2: consistency
     consistency_parser = subparsers.add_parser('consistency', aliases=['s2'],
                                                 help='Phase 2: Consistency calibration')
     consistency_parser.add_argument('--csv-dir', '-d', default=None,
                                      help='Directory containing consistency CSV files')
+    consistency_parser.add_argument('--sensor-type', '-s', default='QMC6309',
+                                     help='Sensor array type (default: QMC6309)')
 
     args = parser.parse_args()
 
     if args.phase in ('ellipsoid', 's1'):
-        processor = CalibrationPostProcessor(args.csv_path, args.type)
+        processor = CalibrationPostProcessor(args.csv_path, args.type, args.sensor_type)
         processor.run()
     elif args.phase in ('consistency', 's2'):
-        processor = ConsistencyPostProcessor(csv_dir=args.csv_dir)
+        processor = ConsistencyPostProcessor(csv_dir=args.csv_dir, sensor_type=args.sensor_type)
         processor.run()
     else:
         parser.print_help()
