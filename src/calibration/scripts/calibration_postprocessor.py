@@ -24,9 +24,7 @@ Usage (Phase 2 - consistency):
 """
 
 import sys
-import os
 from pathlib import Path
-from typing import List, Dict, Optional
 import numpy as np
 import pandas as pd
 import json
@@ -37,7 +35,7 @@ src_root = script_dir.parent.parent
 sys.path.insert(0, str(src_root))
 
 from sensor_array_config import get_config, SensorArrayConfig
-from calibration.lib.ellipsoid_fit import ellipsoid_fit, load_calibration_params
+from calibration.lib.ellipsoid_fit import ellipsoid_fit
 from calibration.lib.consistency_fit import (
     consistency_fit,
     batch_consistency_fit,
@@ -67,7 +65,7 @@ class CalibrationPostProcessor:
     Post-processor for Phase 1 ellipsoid calibration.
 
     Reads the collected CSV, performs ellipsoid calibration,
-    and outputs results to config/intrinsic_params.json.
+    and outputs results to sensor_array_config/config/{sensor_type}/intrinsic_params.json.
     """
 
     def __init__(self, csv_path: str, calibration_type: str = 'ellipsoid', sensor_type: str = 'QMC6309'):
@@ -158,7 +156,7 @@ class CalibrationPostProcessor:
         """Save full calibration results to report/ directory."""
         calibration_params = {
             'version': '1.0',
-            'description': 'QMC6309 Sensor Array Phase 1 Calibration Full Results',
+            'description': f'{self.sensor_type} Sensor Array Phase 1 Calibration Full Results',
             'source_file': f'{self.csv_name}.csv',
             'calibration_type': self.calibration_type,
             'sensors': [r.to_dict() for r in self.results]
@@ -190,7 +188,7 @@ class CalibrationPostProcessor:
 
         print("\n" + "=" * 70)
         print("Phase 1 校准完成!")
-        print(f"内参文件: serial_processor/config/intrinsic_params.json")
+        print(f"内参文件: {self.config_dir / 'intrinsic_params.json'}")
         print(f"结果目录: report/")
         print("=" * 70 + "\n")
 
