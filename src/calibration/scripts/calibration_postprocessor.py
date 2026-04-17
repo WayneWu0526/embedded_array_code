@@ -200,7 +200,7 @@ class ConsistencyPostProcessor:
     Post-processor for Phase 2 consistency calibration.
 
     Reads CSV files from consistency_calibration, performs consistency fitting,
-    and outputs results to serial_processor/config/consistency_params.json.
+    and outputs results to sensor_array_config/config/{sensor_type}/consistency_params.json.
     """
 
     def __init__(self, csv_dir: str = None, calibration_type: str = 'consistency', sensor_type: str = 'QMC6309'):
