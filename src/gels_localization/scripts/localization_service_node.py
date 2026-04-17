@@ -355,10 +355,10 @@ def handle_localize_cycle(req):
             resp.localization_pose.position.x = p_est[0]
             resp.localization_pose.position.y = p_est[1]
             resp.localization_pose.position.z = p_est[2]
-            resp.localization_pose.orientation.x = quat[0]
-            resp.localization_pose.orientation.y = quat[1]
-            resp.localization_pose.orientation.z = quat[2]
-            resp.localization_pose.orientation.w = quat[3]
+            resp.localization_pose.orientation.x = quat[1]
+            resp.localization_pose.orientation.y = quat[2]
+            resp.localization_pose.orientation.z = quat[3]
+            resp.localization_pose.orientation.w = quat[0]
             resp.position_error = float(position_error)
             resp.orientation_error = float(orientation_error)
 
