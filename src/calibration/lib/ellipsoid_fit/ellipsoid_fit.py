@@ -16,6 +16,7 @@ from typing import Dict, List
 from dataclasses import dataclass, asdict
 
 from .full_ellipsoid_fit import full_ellipsoid_fit
+from sensor_array_config.base import get_config, SensorArrayConfig, IntrinsicParamsSet, IntrinsicParams
 
 
 @dataclass
@@ -112,18 +113,24 @@ def apply_calibration(b_raw: np.ndarray, o_i: np.ndarray, C_i: np.ndarray) -> np
 
 
 def batch_ellipsoid_fit(csv_path: Path, output_dir: Path = None,
-                        use_iterative: bool = False) -> List[CalibrationResult]:
+                        use_iterative: bool = False,
+                        sensor_config: SensorArrayConfig = None) -> List[CalibrationResult]:
     """
-    批量处理单个 CSV 文件中所有 12 颗传感器的校准
+    批量处理单个 CSV 文件中所有传感器的校准
 
     Args:
         csv_path: CSV 文件路径
         output_dir: 输出目录（可选，用于保存参数）
         use_iterative: 是否使用迭代方法
+        sensor_config: 传感器配置（可选，默认使用 QMC6309）
 
     Returns:
-        List of CalibrationResult for all 12 sensors
+        List of CalibrationResult for all sensors
     """
+    if sensor_config is None:
+        sensor_config = get_config("QMC6309")
+    n_sensors = sensor_config.manifest.n_sensors
+
     import pandas as pd
 
     # 读取数据
@@ -131,7 +138,7 @@ def batch_ellipsoid_fit(csv_path: Path, output_dir: Path = None,
 
     results = []
 
-    for sensor_id in range(1, 13):
+    for sensor_id in sensor_config.get_sensor_ids():
         col_x = f'sensor_{sensor_id}_x'
         col_y = f'sensor_{sensor_id}_y'
         col_z = f'sensor_{sensor_id}_z'
@@ -167,28 +174,28 @@ def batch_ellipsoid_fit(csv_path: Path, output_dir: Path = None,
     # 保存参数
     if output_dir is not None:
         output_path = Path(output_dir) / f"intrinsic_params_{Path(csv_path).stem}.json"
-        save_calibration_params(results, output_path)
+        save_calibration_params(results, output_path, sensor_config=sensor_config)
 
     return results
 
 
-def save_calibration_params(results: List[CalibrationResult], output_path: Path):
+def save_calibration_params(results: List[CalibrationResult], output_path: Path,
+                             sensor_config: SensorArrayConfig = None):
     """
     保存校准参数到 JSON 文件
 
     Args:
         results: 校准结果列表
         output_path: 输出文件路径
+        sensor_config: 传感器配置（可选，默认使用 QMC6309）
     """
-    output_data = {
-        'version': '1.0',
-        'description': 'QMC6309 Sensor Array Ellipsoid Calibration Parameters',
-        'sensors': [r.to_dict() for r in results]
-    }
-
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(output_data, f, indent=2, ensure_ascii=False)
-
+    if sensor_config is None:
+        sensor_config = get_config("QMC6309")
+    params_set = IntrinsicParamsSet(params={
+        r.sensor_id: IntrinsicParams(o_i=r.o_i, C_i=r.C_i)
+        for r in results
+    })
+    params_set.to_json(str(output_path))
     print(f"\nCalibration params saved to: {output_path}")
 
 
