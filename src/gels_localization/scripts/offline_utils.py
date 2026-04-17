@@ -38,7 +38,7 @@ def quaternion_z_axis(q):
     return z_axis / np.linalg.norm(z_axis)
 
 
-def generate_hall_data_from_dipole(sensor_ids, p_sensor_array, R_sensor_array, d_list, source_p_Ci, m_Ci, R_CORR, noise_level=1e-10):
+def generate_hall_data_from_dipole(sensor_ids, p_sensor_array, R_sensor_array, d_list, source_p_Ci, m_Ci, noise_level=1e-10, gs_to_tesla=None):
     """
     Generate synthetic Hall sensor data using mag_dipole_model.
 
@@ -49,13 +49,12 @@ def generate_hall_data_from_dipole(sensor_ids, p_sensor_array, R_sensor_array, d
         d_list: 12x3 array of sensor positions relative to array center
         source_p_Ci: 3D position of the magnetic dipole source
         m_Ci: 3D magnetic moment vector of the source
-        R_CORR: dict of rotation correction matrices per sensor group
         noise_level: standard deviation of Gaussian noise to add
+        gs_to_tesla: Optional, unit conversion from Gs to Tesla. If None, uses sensor_array_config default.
 
     Returns:
         list of MockSensorReading
     """
-    from localization_service_node import get_sensor_group, GS_TO_TESLA
     from offline_mock import MockSensorReading
 
     data = []
@@ -70,17 +69,12 @@ def generate_hall_data_from_dipole(sensor_ids, p_sensor_array, R_sensor_array, d
         b_global, _ = mag_dipole_model(p_sensor_global, m_Ci, source_p_Ci, order=3)
 
         # Transform from global to sensor array frame: b_array = R.T @ b_global
-        b_array = R_sensor_array.T @ b_global
-
-        # Apply R_CORR.T to get raw sensor measurement (sensor local frame)
-        group = get_sensor_group(sid)
-        if group is not None and group in R_CORR:
-            b_sensor = R_CORR[group].T @ b_array
-        else:
-            b_sensor = b_array
+        # This is the corrected sensor frame output (R_CORR is applied in serial_processor)
+        b_sensor = R_sensor_array.T @ b_global
 
         # Convert from Tesla to Gs (Hall sensor output is in Gs)
-        b_sensor_gs = b_sensor / GS_TO_TESLA
+        gs_to_t = gs_to_tesla if gs_to_tesla is not None else 1.0e-4
+        b_sensor_gs = b_sensor / gs_to_t
 
         # Add noise (in Gs)
         x = b_sensor_gs[0] + noise_level * np.random.randn()
@@ -242,7 +236,7 @@ def generate_synthetic_request_from_json(json_path, cycle_id=None, mode_override
         tuple: (MockLocalizeCycleRequest, sources, p_sensor_array, R_sensor_array)
     """
     import json
-    from localization_service_node import R_CORR, D_LIST
+    from localization_service_node import D_LIST
     from offline_mock import MockPose, MockSlotData, MockLocalizeCycleRequest
 
     with open(json_path) as f:
@@ -287,7 +281,7 @@ def generate_synthetic_request_from_json(json_path, cycle_id=None, mode_override
 
         # Generate synthetic sensor data
         sensor_readings = generate_hall_data_from_dipole(
-            sensor_ids, p_sensor_array, R_sensor_array, D_LIST, p_Ci, m_Ci, R_CORR
+            sensor_ids, p_sensor_array, R_sensor_array, D_LIST, p_Ci, m_Ci
         )
 
         pose = MockPose(
@@ -306,8 +300,7 @@ def generate_synthetic_request_from_json(json_path, cycle_id=None, mode_override
         b0_data = generate_hall_data_from_dipole(
             sensor_ids, p_sensor_array, R_sensor_array, D_LIST,
             np.array([0.0, 0.0, 0.0]),
-            np.array([0.0, 0.0, 0.0]),
-            R_CORR
+            np.array([0.0, 0.0, 0.0])
         )
         slot_data_list.append(MockSlotData(slot=3, sensor_data=b0_data, pose=MockPose()))
 
@@ -846,7 +839,7 @@ def sensitivity_analysis_x_hat_noise(D_cal, sources, B_meas_cell,
 def print_magnetic_field_table(req, model_req=None, output_csv=None):
     """
     Print a comparison table of processed magnetic field values (Bx, By, Bz, |B|) in Gs
-    for each sensor in each slot, after applying R_CORR correction.
+    for each sensor in each slot (data is already R_CORR-corrected by serial_processor).
 
     For CVT mode (which has B0 slot 3), shows B_meas - B0 (background subtraction).
     For non-CVT mode, shows raw B_meas.
@@ -926,9 +919,9 @@ def print_magnetic_field_table(req, model_req=None, output_csv=None):
     print("\n" + "=" * 110)
     suffix = " (B_meas - B0)" if is_cvt else ""
     if model_req is not None:
-        print(f"Magnetic Field Comparison: Real vs Mock (Gs, after R_CORR correction){suffix}")
+        print(f"Magnetic Field Comparison: Real vs Mock (Gs){suffix}")
     else:
-        print(f"Magnetic Field Values (Gs, after R_CORR correction){suffix}")
+        print(f"Magnetic Field Values (Gs){suffix}")
     print("=" * 110)
 
     col_w = 10
