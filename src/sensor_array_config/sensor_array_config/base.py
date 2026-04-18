@@ -33,11 +33,20 @@ class IntrinsicParamsSet:
         with open(path) as f:
             raw = json.load(f)
         params = {}
-        for sid, entry in raw.items():
-            params[int(sid)] = IntrinsicParams(
-                o_i=entry["o_i"],
-                C_i=entry["C_i"]
-            )
+        # New format: {"sensors": [{"sensor_id": 1, "o_i": [...], "C_i": [...]}, ...]}
+        if "sensors" in raw:
+            for entry in raw["sensors"]:
+                params[entry["sensor_id"]] = IntrinsicParams(
+                    o_i=entry["o_i"],
+                    C_i=entry["C_i"]
+                )
+        # Old format: {"1": {"o_i": [...], "C_i": [...]}, ...}
+        else:
+            for sid, entry in raw.items():
+                params[int(sid)] = IntrinsicParams(
+                    o_i=entry["o_i"],
+                    C_i=entry["C_i"]
+                )
         return cls(params=params)
 
     def to_json(self, path: str):
@@ -60,11 +69,20 @@ class ConsistencyParamsSet:
         with open(path) as f:
             raw = json.load(f)
         params = {}
-        for sid, entry in raw.items():
-            params[int(sid)] = ConsistencyParams(
-                D_i=entry["D_i"],
-                e_i=entry["e_i"]
-            )
+        # New format: {"sensors": [{"sensor_id": 1, "D_i": [...], "e_i": [...]}, ...]}
+        if "sensors" in raw:
+            for entry in raw["sensors"]:
+                params[entry["sensor_id"]] = ConsistencyParams(
+                    D_i=entry["D_i"],
+                    e_i=entry["e_i"]
+                )
+        # Old format: {"1": {"D_i": [...], "e_i": [...]}, ...}
+        else:
+            for sid, entry in raw.items():
+                params[int(sid)] = ConsistencyParams(
+                    D_i=entry["D_i"],
+                    e_i=entry["e_i"]
+                )
         return cls(params=params)
 
     def to_json(self, path: str):
@@ -82,9 +100,19 @@ class SensorArrayHardwareParams:
     def from_json(cls, path: str) -> "SensorArrayHardwareParams":
         with open(path) as f:
             raw = json.load(f)
+        d_list = raw["d_list"]
+        # New format: r_corr_r1, r_corr_r2, r_corr_r3, r_corr_r4 (3x3 row-major matrices)
+        if "r_corr_r1" in raw:
+            R_CORR = []
+            for i in range(1, 5):
+                key = f"r_corr_r{i}"
+                R_CORR.extend(raw[key])
+        # Old format: R_CORR as single flat array
+        else:
+            R_CORR = raw["R_CORR"]
         return cls(
-            d_list=raw["d_list"],
-            R_CORR=raw["R_CORR"]
+            d_list=d_list,
+            R_CORR=R_CORR
         )
 
 # ---------- sensor array config (facade) ----------

@@ -19,10 +19,10 @@ from .consistency_fit import (
     validate_consistency,
     save_consistency_params,
     load_consistency_params,
-    load_ellipsoid_params,
     load_csv_data,
     compute_stable_mean,
     fit_D_and_e,
+    auto_detect_channel_axis_mapping,
     FieldCondition,
     ConsistencyResult,
 )
@@ -39,12 +39,12 @@ __all__ = [
     # Save/load
     'save_consistency_params',
     'load_consistency_params',
-    'load_ellipsoid_params',
 
     # Utilities
     'load_csv_data',
     'compute_stable_mean',
     'fit_D_and_e',
+    'auto_detect_channel_axis_mapping',
 
     # Data classes
     'FieldCondition',

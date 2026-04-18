@@ -1,7 +1,0 @@
-{
-  "description": "Rotation correction parameters for sensor array mounting orientation",
-  "r_corr_r1": [1, 0, 0, 0, 0, -1, 0, 1, 0],
-  "r_corr_r2": [1, 0, 0, 0, 0, 1, 0, -1, 0],
-  "r_corr_r3": [-1, 0, 0, 0, 0, 1, 0, 1, 0],
-  "r_corr_r4": [-1, 0, 0, 0, 0, -1, 0, -1, 0]
-}

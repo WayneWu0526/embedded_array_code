@@ -22,6 +22,81 @@ from dataclasses import dataclass, asdict
 from sensor_array_config.base import get_config, SensorArrayConfig, ConsistencyParamsSet, ConsistencyParams
 
 
+# ============== 通道-轴 自动检测 ==============
+def auto_detect_channel_axis_mapping(
+    csv_dir: Path,
+    data_files: Dict[str, str] = None,
+    n_sensors: int = 12,
+) -> Dict[int, str]:
+    """
+    自动检测通道与磁场轴的对应关系。
+
+    原理：激活某个通道时，哪个方向的磁场绝对值增量最大，
+    说明这个通道主要驱动该方向。
+
+    Args:
+        csv_dir: CSV 文件目录
+        data_files: 数据文件映射
+        n_sensors: 传感器数量
+
+    Returns:
+        channel_to_axis: {1: 'x', 2: 'y', 3: 'z'} 或类似映射
+    """
+    if data_files is None:
+        data_files = {
+            'background': 'consistency_calib_background.csv',
+            'ch1_positive': 'consistency_calib_ch1_positive.csv',
+            'ch1_negative': 'consistency_calib_ch1_negative.csv',
+            'ch2_positive': 'consistency_calib_ch2_positive.csv',
+            'ch2_negative': 'consistency_calib_ch2_negative.csv',
+            'ch3_positive': 'consistency_calib_ch3_positive.csv',
+            'ch3_negative': 'consistency_calib_ch3_negative.csv',
+        }
+
+    # 加载背景数据
+    bg_path = Path(csv_dir) / data_files['background']
+    if not bg_path.exists():
+        raise FileNotFoundError(f"Background CSV not found: {bg_path}")
+    bg_data = load_csv_data(bg_path, n_sensors)
+    bg_mean = compute_stable_mean(bg_data)  # (n_sensors, 3)
+
+    channel_to_axis = {}
+    axis_names = ['x', 'y', 'z']
+
+    for ch in [1, 2, 3]:
+        pos_path = Path(csv_dir) / data_files[f'ch{ch}_positive']
+        neg_path = Path(csv_dir) / data_files[f'ch{ch}_negative']
+
+        if not pos_path.exists() or not neg_path.exists():
+            print(f"[WARN] CH{ch} data files not found, skipping auto-detection")
+            continue
+
+        pos_data = load_csv_data(pos_path, n_sensors)
+        neg_data = load_csv_data(neg_path, n_sensors)
+        pos_mean = compute_stable_mean(pos_data)
+        neg_mean = compute_stable_mean(neg_data)
+
+        # 计算相对于背景的增量（取正负极性的平均幅度）
+        delta_pos = pos_mean - bg_mean
+        delta_neg = neg_mean - bg_mean
+
+        # 计算每个方向的平均绝对增量
+        mean_abs_x = (np.abs(delta_pos[:, 0]).mean() + np.abs(delta_neg[:, 0]).mean()) / 2
+        mean_abs_y = (np.abs(delta_pos[:, 1]).mean() + np.abs(delta_neg[:, 1]).mean()) / 2
+        mean_abs_z = (np.abs(delta_pos[:, 2]).mean() + np.abs(delta_neg[:, 2]).mean()) / 2
+
+        abs_components = [mean_abs_x, mean_abs_y, mean_abs_z]
+        max_idx = np.argmax(abs_components)
+        detected_axis = axis_names[max_idx]
+
+        print(f"  [Auto-detect] CH{ch} -> {detected_axis.upper()} axis "
+              f"(|dx|={mean_abs_x:.4f}, |dy|={mean_abs_y:.4f}, |dz|={mean_abs_z:.4f})")
+
+        channel_to_axis[ch] = detected_axis
+
+    return channel_to_axis
+
+
 # ============== 场条件枚举 ==============
 class FieldCondition:
     ZERO = 0       # 0场 (background)
@@ -196,6 +271,7 @@ def consistency_fit(
     csv_dir: Path,
     data_files: Dict[str, str] = None,
     sensor_config: SensorArrayConfig = None,
+    auto_detect: bool = True,
 ) -> Tuple[List[np.ndarray], List[np.ndarray], Dict]:
     """
     执行一致性校准（单次调用完成全部计算）
@@ -207,6 +283,8 @@ def consistency_fit(
         csv_dir: CSV 文件所在目录
         data_files: 可选，自定义数据文件映射
         sensor_config: 可选，传感器配置对象
+        auto_detect: 是否自动检测通道-轴映射（默认True），
+                     为False时使用硬编码的 {ch1:z, ch2:y, ch3:x} 映射
 
     Returns:
         (D_list, e_list, fit_info)
@@ -226,15 +304,28 @@ def consistency_fit(
             'ch3_negative': 'consistency_calib_ch3_negative.csv',
         }
 
-    condition_map = {
-        'background': FieldCondition.ZERO,
-        'ch1_positive': FieldCondition.POS_Z,
-        'ch1_negative': FieldCondition.NEG_Z,
-        'ch2_positive': FieldCondition.POS_Y,
-        'ch2_negative': FieldCondition.NEG_Y,
-        'ch3_positive': FieldCondition.POS_X,
-        'ch3_negative': FieldCondition.NEG_X,
-    }
+    # 自动检测或使用硬编码映射
+    if auto_detect:
+        print("\n" + "=" * 60)
+        print("Auto-detecting channel-to-axis mapping...")
+        print("=" * 60)
+        channel_to_axis = auto_detect_channel_axis_mapping(csv_dir, data_files, n_sensors)
+        print("=" * 60)
+    else:
+        # 硬编码的默认映射（后备）
+        channel_to_axis = {1: 'z', 2: 'y', 3: 'x'}
+
+    # 根据检测结果构建 condition_map
+    axis_to_cond_pos = {'x': FieldCondition.POS_X, 'y': FieldCondition.POS_Y, 'z': FieldCondition.POS_Z}
+    axis_to_cond_neg = {'x': FieldCondition.NEG_X, 'y': FieldCondition.NEG_Y, 'z': FieldCondition.NEG_Z}
+
+    condition_map = {'background': FieldCondition.ZERO}
+    for ch, axis in channel_to_axis.items():
+        condition_map[f'ch{ch}_positive'] = axis_to_cond_pos[axis]
+        condition_map[f'ch{ch}_negative'] = axis_to_cond_neg[axis]
+
+    print(f"\n  Channel-Axis mapping: {channel_to_axis}")
+    print(f"  Condition map: {condition_map}")
 
     # 加载并处理数据（数据已经是 ellipsoid + rotation 校正后的）
     b_norm_means = {}
@@ -263,6 +354,7 @@ def batch_consistency_fit(
     csv_dir: Path,
     output_path: Path = None,
     sensor_config: SensorArrayConfig = None,
+    auto_detect: bool = True,
 ) -> List[ConsistencyResult]:
     """
     批量处理一致性校准，返回完整结果
@@ -271,6 +363,7 @@ def batch_consistency_fit(
         csv_dir: CSV 文件所在目录
         output_path: 可选，输出 JSON 路径
         sensor_config: 可选，传感器配置对象
+        auto_detect: 是否自动检测通道-轴映射（默认True）
 
     Returns:
         List of ConsistencyResult for all n_sensors sensors
@@ -279,7 +372,7 @@ def batch_consistency_fit(
         sensor_config = get_config("QMC6309")
     n_sensors = sensor_config.manifest.n_sensors
 
-    D_list, e_list, fit_info = consistency_fit(csv_dir, data_files=None, sensor_config=sensor_config)
+    D_list, e_list, fit_info = consistency_fit(csv_dir, data_files=None, sensor_config=sensor_config, auto_detect=auto_detect)
 
     results = []
     for i in range(n_sensors):
@@ -305,6 +398,7 @@ def validate_consistency(
     D_list: List[np.ndarray],
     e_list: List[np.ndarray],
     sensor_config: SensorArrayConfig = None,
+    channel_to_axis: Dict[int, str] = None,
 ) -> Dict:
     """
     验证一致性校正效果
@@ -314,6 +408,8 @@ def validate_consistency(
         D_list: D_i 矩阵列表
         e_list: e_i 向量列表
         sensor_config: 可选，传感器配置对象
+        channel_to_axis: 可选，通道-轴映射，如 {1: 'x', 2: 'y', 3: 'z'}，
+                         如果为 None，则自动检测
 
     Returns:
         包含校正前后标准差对比的字典
@@ -332,15 +428,18 @@ def validate_consistency(
         'ch3_negative': 'consistency_calib_ch3_negative.csv',
     }
 
-    condition_map = {
-        'background': FieldCondition.ZERO,
-        'ch1_positive': FieldCondition.POS_Z,
-        'ch1_negative': FieldCondition.NEG_Z,
-        'ch2_positive': FieldCondition.POS_Y,
-        'ch2_negative': FieldCondition.NEG_Y,
-        'ch3_positive': FieldCondition.POS_X,
-        'ch3_negative': FieldCondition.NEG_X,
-    }
+    # 自动检测或使用提供的映射
+    if channel_to_axis is None:
+        print("\n  [validate] Auto-detecting channel-to-axis mapping...")
+        channel_to_axis = auto_detect_channel_axis_mapping(csv_dir, data_files, n_sensors)
+
+    axis_to_cond_pos = {'x': FieldCondition.POS_X, 'y': FieldCondition.POS_Y, 'z': FieldCondition.POS_Z}
+    axis_to_cond_neg = {'x': FieldCondition.NEG_X, 'y': FieldCondition.NEG_Y, 'z': FieldCondition.NEG_Z}
+
+    condition_map = {'background': FieldCondition.ZERO}
+    for ch, axis in channel_to_axis.items():
+        condition_map[f'ch{ch}_positive'] = axis_to_cond_pos[axis]
+        condition_map[f'ch{ch}_negative'] = axis_to_cond_neg[axis]
 
     # 数据已经是 ellipsoid + rotation 校正后的，直接使用
     b_norm_means = {}
@@ -436,6 +535,8 @@ Examples:
                         help='Run validation after fitting')
     parser.add_argument('--no-save', action='store_true',
                         help='Only compute, do not save')
+    parser.add_argument('--no-auto-detect', action='store_true',
+                        help='Use hardcoded channel-axis mapping instead of auto-detection')
 
     args = parser.parse_args()
 
@@ -469,7 +570,8 @@ Examples:
     save_path = None if args.no_save else output_path
 
     # Run consistency fit
-    results = batch_consistency_fit(csv_dir, save_path, sensor_config=get_config("QMC6309"))
+    auto_detect = not args.no_auto_detect
+    results = batch_consistency_fit(csv_dir, save_path, sensor_config=get_config("QMC6309"), auto_detect=auto_detect)
 
     # Print fitted parameters
     print("\n  Fitted parameters:")

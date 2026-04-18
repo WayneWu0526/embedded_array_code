@@ -11,7 +11,7 @@ Suppose you want to add support for a new sensor array called `MY_SENSOR`.
 ### Step 1: Create Configuration Directory
 
 ```bash
-mkdir -p src/sensor_array_config/config/my_sensor
+mkdir -p src/sensor_array_config/sensor_array_config/config/my_sensor
 ```
 
 ### Step 2: Create `calibration_manifest.yaml`
@@ -104,7 +104,7 @@ gs_to_tesla: 1.0e-4
 
 ### Step 7: Implement `MY_SENSOR` Class
 
-Create `src/sensor_array_config/my_sensor.py`:
+Create `src/sensor_array_config/sensor_array_config/my_sensor.py`:
 
 ```python
 import os
@@ -162,7 +162,7 @@ class MySensorConfig(SensorArrayConfig):
 
 ### Step 8: Register the New Type
 
-In `src/sensor_array_config/base.py`, add to `_REGISTRY`:
+In `src/sensor_array_config/sensor_array_config/base.py`, add to `_REGISTRY`:
 
 ```python
 def _lazy_register():
@@ -170,7 +170,6 @@ def _lazy_register():
     from .my_sensor import MySensorConfig  # <-- add this
     _REGISTRY["QMC6309"] = QMC6309Config
     _REGISTRY["MY_SENSOR"] = MySensorConfig  # <-- add this
-_register_qmc6309()
 ```
 
 ### Step 9: Use the New Sensor Type
@@ -188,20 +187,28 @@ rosparam set /data_collection_node/sensor_type MY_SENSOR
 ## Directory Structure
 
 ```
-src/sensor_array_config/config/
-├── README.md                    # This file
-├── qmc6309/                    # QMC6309 sensor array bundle
-│   ├── calibration_manifest.yaml
-│   ├── intrinsic_params.json
-│   ├── consistency_params.json
-│   ├── sensor_array_params.json
-│   └── sensor_calibration.yaml
-└── my_sensor/                  # Example: MY_SENSOR bundle
-    ├── calibration_manifest.yaml
-    ├── intrinsic_params.json
-    ├── consistency_params.json
-    ├── sensor_array_params.json
-    └── sensor_calibration.yaml
+src/sensor_array_config/
+├── CMakeLists.txt
+├── package.xml
+├── setup.py
+└── sensor_array_config/            # Python package
+    ├── __init__.py
+    ├── base.py
+    ├── qmc6309.py
+    └── config/                    # Sensor configuration bundles
+        ├── README.md               # This file
+        ├── qmc6309/               # QMC6309 sensor array bundle
+        │   ├── calibration_manifest.yaml
+        │   ├── intrinsic_params.json
+        │   ├── consistency_params.json
+        │   ├── sensor_array_params.json
+        │   └── sensor_calibration.yaml
+        └── my_sensor/             # Example: MY_SENSOR bundle
+            ├── calibration_manifest.yaml
+            ├── intrinsic_params.json
+            ├── consistency_params.json
+            ├── sensor_array_params.json
+            └── sensor_calibration.yaml
 ```
 
 ---
