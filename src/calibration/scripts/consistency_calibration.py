@@ -34,6 +34,7 @@ class ConsistencyCalibration:
         self.samples_per_group = rospy.get_param('~samples_per_group', 10)
         self.output_dir = rospy.get_param('~output_dir',
             os.path.expanduser('~/sensor_data/consistency'))
+        self._sensor_type = rospy.get_param('~sensor_type', 'QMC6309')
 
         # State
         self.latest_sensor_data = None
@@ -344,17 +345,30 @@ class ConsistencyCalibration:
         """Cleanup on shutdown - run Phase 2 consistency post-processing."""
         rospy.loginfo("Running Phase 2 consistency post-processing...")
         try:
-            from calibration_postprocessor import ConsistencyPostProcessor
-            post_processor = ConsistencyPostProcessor(
-                csv_dir=self.output_dir,
-                calibration_type='consistency'
+            from calibration.lib.consistency_fit import batch_consistency_fit
+            import os
+
+            # Output to sensor_array_config/{sensor_type}/
+            sensor_type_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                'sensor_array_config', 'config', self._sensor_type
             )
-            post_processor.run()
+            os.makedirs(sensor_type_dir, exist_ok=True)
+
+            # Run Phase 2 consistency calibration
+            results = batch_consistency_fit(
+                csv_dir=self.output_dir,
+                output_path=os.path.join(sensor_type_dir, 'consistency_params.json'),
+                auto_detect=True
+            )
+
+            rospy.loginfo("Phase 2 calibration complete. Consistency params saved.")
         except Exception as e:
-            rospy.logerr(f"Post-processing failed: {e}")
+            rospy.logerr(f"Phase 2 calibration failed: {e}")
             import traceback
             traceback.print_exc()
         rospy.loginfo("Consistency calibration complete.")
+        rospy.loginfo("Data saved to: %s", self.output_dir)
 
     def run(self):
         """Main execution flow."""

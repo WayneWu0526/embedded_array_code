@@ -133,18 +133,37 @@ class HandheldCalibrationSampler:
         if self.csv_file is not None:
             self.csv_file.close()
             rospy.loginfo(f"CSV file closed. Total samples: {self.sample_count}")
-            self.csv_file = None  # Prevent double close
+            rospy.loginfo(f"CSV saved to: {self.csv_path}")
 
-            # Run Phase 1 calibration (s1) - only if we have valid data
-            if self.csv_path is not None:
-                rospy.loginfo("Running s1 calibration...")
-                from calibration_postprocessor import CalibrationPostProcessor
-                post_processor = CalibrationPostProcessor(
-                    csv_path=self.csv_path,
-                    calibration_type='handheld',
-                    sensor_type=self._sensor_type
+        # Run Phase 1 (ellipsoid) calibration automatically
+        if self.csv_path is not None and self.sample_count > 0:
+            rospy.loginfo("Running Phase 1 (ellipsoid) calibration...")
+            try:
+                from calibration.lib.ellipsoid_fit import batch_ellipsoid_fit, save_calibration_params
+                import os
+
+                # Output to sensor_array_config/{sensor_type}/
+                sensor_type_dir = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                    'sensor_array_config', 'config', self._sensor_type
                 )
-                post_processor.run()
+                os.makedirs(sensor_type_dir, exist_ok=True)
+
+                results = batch_ellipsoid_fit(
+                    csv_path=self.csv_path,
+                    output_dir=sensor_type_dir,
+                    sensor_config=self._sensor_config
+                )
+
+                # Save to standard location
+                output_path = os.path.join(sensor_type_dir, 'intrinsic_params.json')
+                save_calibration_params(results, output_path, sensor_config=self._sensor_config)
+
+                rospy.loginfo("Phase 1 calibration complete. Intrinsic params saved.")
+            except Exception as e:
+                rospy.logerr(f"Phase 1 calibration failed: {e}")
+                import traceback
+                traceback.print_exc()
 
         rospy.loginfo("Handheld calibration complete.")
 
