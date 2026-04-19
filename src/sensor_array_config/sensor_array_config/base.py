@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List
 import json
 import os
+import numpy as np
 
 # ---------- manifest schema ----------
 @dataclass
@@ -92,24 +93,53 @@ class ConsistencyParamsSet:
 
 # ---------- sensor array hardware params ----------
 @dataclass
+class RCorrEntry:
+    """Single R_CORR entry: a rotation matrix shared by a list of sensors."""
+    sensor_ids: List[int]
+    matrix: List[float]  # 9 elements, column-major (Fortran order)
+
+    def to_numpy(self) -> np.ndarray:
+        return np.array(self.matrix).reshape(3, 3, order='F')
+
+
+@dataclass
 class SensorArrayHardwareParams:
     d_list: List[List[float]]
-    R_CORR: List[List[float]]
+    R_CORR: List[RCorrEntry]
 
     @classmethod
     def from_json(cls, path: str) -> "SensorArrayHardwareParams":
         with open(path) as f:
             raw = json.load(f)
         d_list = raw["d_list"]
-        # New format: r_corr_r1, r_corr_r2, r_corr_r3, r_corr_r4 (3x3 row-major matrices)
-        if "r_corr_r1" in raw:
+        # New format: R_CORR is a list of {sensor_ids, matrix} entries
+        if isinstance(raw["R_CORR"], list) and len(raw["R_CORR"]) > 0:
+            first = raw["R_CORR"][0]
+            if isinstance(first, dict) and "sensor_ids" in first:
+                R_CORR = [
+                    RCorrEntry(entry["sensor_ids"], entry["matrix"])
+                    for entry in raw["R_CORR"]
+                ]
+            else:
+                # Old flat format: list of lists (group matrices concatenated)
+                R_CORR = []
+                n_groups = len(raw["R_CORR"]) // 9
+                for i in range(n_groups):
+                    R_CORR.append(RCorrEntry(
+                        sensor_ids=list(range(i*3+1, i*3+4)),
+                        matrix=raw["R_CORR"][i*9:(i+1)*9]
+                    ))
+        # Legacy format: r_corr_r1, r_corr_r2, ... keys
+        elif "r_corr_r1" in raw:
             R_CORR = []
             for i in range(1, 5):
                 key = f"r_corr_r{i}"
-                R_CORR.extend(raw[key])
-        # Old format: R_CORR as single flat array
+                R_CORR.append(RCorrEntry(
+                    sensor_ids=list(range((i-1)*3+1, i*3+1)),
+                    matrix=raw[key]
+                ))
         else:
-            R_CORR = raw["R_CORR"]
+            R_CORR = []
         return cls(
             d_list=d_list,
             R_CORR=R_CORR

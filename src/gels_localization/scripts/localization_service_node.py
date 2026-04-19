@@ -79,9 +79,9 @@ def load_configuration(yaml_path=None):
 
     config = _get_sensor_config()
 
-    # D_LIST from hardware params (3 x n_sensors)
+    # D_LIST from hardware params (n_sensors x 3), indexed as D_LIST[sensor_idx, :]
     hw = config.hardware
-    D_LIST = np.array(hw.d_list).T  # Convert to 3 x N matrix
+    D_LIST = np.array(hw.d_list)  # Shape (n_sensors, 3)
 
     # GS_TO_TESLA from config
     GS_TO_TESLA = config.gs_to_si
@@ -285,6 +285,7 @@ def handle_localize_cycle(req):
         sensor_ids = list(req.sensor_ids)
         slot_data = list(req.slot_data)
 
+
         # [2] Data processing - build inputs for MaPS
 
         # Build slot lookup dict
@@ -320,7 +321,7 @@ def handle_localize_cycle(req):
 
             # Magnetic field measurement
             B_meas = process_hall_data(slot.sensor_data)
-
+            
             # Background subtraction for CVT
             if mode == 'CVT' and B0 is not None:
                 B_meas = B_meas - B0

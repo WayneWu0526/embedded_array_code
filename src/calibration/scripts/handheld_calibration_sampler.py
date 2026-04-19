@@ -12,7 +12,13 @@ import sys
 import rospy
 import csv
 import os
-import datetime
+from pathlib import Path
+
+# Add calibration/lib to Python path for ellipsoid_fit import
+_calib_lib = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lib')
+if _calib_lib not in sys.path:
+    sys.path.insert(0, _calib_lib)
+
 from serial_processor.msg import StmUplink
 from sensor_array_config import get_config, SensorArrayConfig
 
@@ -22,6 +28,8 @@ class HandheldCalibrationSampler:
 
         self.samples_per_avg = rospy.get_param('~samples_per_avg', 10)
         self.max_samples = rospy.get_param('~max_samples', 500)
+        self.skip_sampling = rospy.get_param('~skip_sampling', False)
+        self.csv_path_param = rospy.get_param('~csv_path', None)  # For skip_sampling mode
         self.sample_count = 0
 
         # Load sensor array configuration
@@ -29,6 +37,16 @@ class HandheldCalibrationSampler:
         self._sensor_config: SensorArrayConfig = get_config(self._sensor_type)
         self._n_sensors = self._sensor_config.manifest.n_sensors
         rospy.loginfo(f"Using sensor type: {self._sensor_type}, n_sensors={self._n_sensors}")
+
+        # Skip sampling mode: run ellipsoid fit directly on existing CSV
+        if self.skip_sampling:
+            self.csv_path = Path(self.csv_path_param) if self.csv_path_param else self._get_default_csv_path()
+            if not self.csv_path.exists():
+                rospy.logerr(f"CSV file not found: {self.csv_path}")
+                sys.exit(1)
+            rospy.loginfo(f"Skip sampling mode: processing {self.csv_path}")
+            self._run_ellipsoid_fit()
+            return
 
         # Accumulated packages: each package is one complete set of all 12 sensors
         # packages[sensor_id] = list of 10 (x, y, z) tuples
@@ -78,9 +96,7 @@ class HandheldCalibrationSampler:
 
     def _write_averaged_sample(self):
         """Average all packages and write to CSV."""
-        timestamp = datetime.datetime.now().isoformat()
-
-        row = [timestamp]
+        row = []
         for sensor_id in range(1, self._n_sensors + 1):
             packages = self.packages[sensor_id]
             avg_x = sum(p[0] for p in packages) / len(packages)
@@ -107,16 +123,15 @@ class HandheldCalibrationSampler:
         )
         os.makedirs(output_dir, exist_ok=True)
 
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        csv_path = os.path.join(output_dir, f"handheld_calib_{timestamp}.csv")
-        self.csv_path = csv_path  # Save for post-processing
+        csv_path = os.path.join(output_dir, "handheld_calib.csv")
+        self.csv_path = Path(csv_path)  # Save for post-processing
 
         try:
             self.csv_file = open(csv_path, 'w', newline='')
             self.csv_writer = csv.writer(self.csv_file)
 
-            # Header: timestamp, sensor_1_x, sensor_1_y, sensor_1_z, ...
-            header = ['timestamp']
+            # Header: sensor_1_x, sensor_1_y, sensor_1_z, ...
+            header = []
             for i in range(1, self._n_sensors + 1):
                 header.extend([f'sensor_{i}_x', f'sensor_{i}_y', f'sensor_{i}_z'])
             self.csv_writer.writerow(header)
@@ -128,6 +143,43 @@ class HandheldCalibrationSampler:
             rospy.logerr(f"Failed to create CSV file: {e}")
             sys.exit(1)
 
+    def _get_default_csv_path(self) -> Path:
+        """Get default CSV path."""
+        output_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'data'
+        )
+        return Path(output_dir) / "handheld_calib.csv"
+
+    def _run_ellipsoid_fit(self):
+        """Run ellipsoid fit calibration on existing CSV."""
+        rospy.loginfo("Running Phase 1 (ellipsoid) calibration...")
+        try:
+            from ellipsoid_fit import batch_ellipsoid_fit, save_calibration_params
+
+            # Output to sensor_array_config/sensor_array_config/config/{sensor_type}/
+            # Matches QMC6309Config._QMC6309_ROOT path structure
+            sensor_type_dir = Path(__file__).parent.parent.parent / 'sensor_array_config' / 'sensor_array_config' / 'config' / self._sensor_type.lower()
+            sensor_type_dir.mkdir(parents=True, exist_ok=True)
+
+            results = batch_ellipsoid_fit(
+                csv_path=self.csv_path,
+                output_dir=None,
+                sensor_config=self._sensor_config
+            )
+
+            # Save to standard location
+            output_path = sensor_type_dir / 'intrinsic_params.json'
+            save_calibration_params(results, output_path, sensor_config=self._sensor_config)
+
+            rospy.loginfo("Phase 1 calibration complete. Intrinsic params saved.")
+        except Exception as e:
+            rospy.logerr(f"Phase 1 calibration failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+        rospy.loginfo("Handheld calibration complete.")
+
     def cleanup(self):
         """Cleanup on shutdown."""
         if self.csv_file is not None:
@@ -137,33 +189,7 @@ class HandheldCalibrationSampler:
 
         # Run Phase 1 (ellipsoid) calibration automatically
         if self.csv_path is not None and self.sample_count > 0:
-            rospy.loginfo("Running Phase 1 (ellipsoid) calibration...")
-            try:
-                from calibration.lib.ellipsoid_fit import batch_ellipsoid_fit, save_calibration_params
-                import os
-
-                # Output to sensor_array_config/{sensor_type}/
-                sensor_type_dir = os.path.join(
-                    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                    'sensor_array_config', 'config', self._sensor_type
-                )
-                os.makedirs(sensor_type_dir, exist_ok=True)
-
-                results = batch_ellipsoid_fit(
-                    csv_path=self.csv_path,
-                    output_dir=sensor_type_dir,
-                    sensor_config=self._sensor_config
-                )
-
-                # Save to standard location
-                output_path = os.path.join(sensor_type_dir, 'intrinsic_params.json')
-                save_calibration_params(results, output_path, sensor_config=self._sensor_config)
-
-                rospy.loginfo("Phase 1 calibration complete. Intrinsic params saved.")
-            except Exception as e:
-                rospy.logerr(f"Phase 1 calibration failed: {e}")
-                import traceback
-                traceback.print_exc()
+            self._run_ellipsoid_fit()
 
         rospy.loginfo("Handheld calibration complete.")
 

@@ -17,12 +17,19 @@ Usage:
 """
 
 import os
+import sys
 import csv
 import threading
+from pathlib import Path
 import rospy
 from datetime import datetime
 from std_msgs.msg import Bool, Float32
 from serial_processor.msg import StmUplink
+
+# Add calibration/lib to Python path for consistency_fit import
+_calib_lib = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lib')
+if _calib_lib not in sys.path:
+    sys.path.insert(0, _calib_lib)
 
 
 class ConsistencyCalibration:
@@ -35,6 +42,8 @@ class ConsistencyCalibration:
         self.output_dir = rospy.get_param('~output_dir',
             os.path.expanduser('~/sensor_data/consistency'))
         self._sensor_type = rospy.get_param('~sensor_type', 'QMC6309')
+        self.skip_sampling = rospy.get_param('~skip_sampling', False)
+        self.skip_csv_dir = rospy.get_param('~skip_csv_dir', None)  # For skip_sampling mode
 
         # State
         self.latest_sensor_data = None
@@ -43,6 +52,18 @@ class ConsistencyCalibration:
         self.current_polarity = "positive"
         self.current_channel = None
         self.sample_buffer = []  # Buffer for averaging
+
+        # Skip sampling mode: run consistency fit directly on existing CSV data
+        if self.skip_sampling:
+            self.csv_dir = Path(self.skip_csv_dir) if self.skip_csv_dir else self._get_default_csv_dir()
+            if not self.csv_dir.exists():
+                rospy.logerr(f"CSV directory not found: {self.csv_dir}")
+                sys.exit(1)
+            rospy.loginfo(f"Skip sampling mode: processing {self.csv_dir}")
+            self._run_consistency_fit()
+            # Do not return here; we need the object to stay alive so it can be accessed in main,
+            # but we won't initialize hardware or subscribers.
+            return
 
         # Publishers for FY8300
         self.pub_fy8300_ch = [
@@ -341,28 +362,150 @@ class ConsistencyCalibration:
         except Exception as e:
             rospy.logerr(f"Failed to write CSV: {e}")
 
+    def _get_default_csv_dir(self) -> Path:
+        """Get default CSV directory."""
+        return Path(os.path.expanduser('~/sensor_data/consistency'))
+
+    def _run_consistency_fit(self):
+        """Run consistency fit calibration on existing CSV data."""
+        rospy.loginfo("Running Phase 2 (consistency) calibration...")
+        try:
+            from consistency_fit import batch_consistency_fit, validate_consistency
+            import numpy as np
+
+            # Output to sensor_array_config/sensor_array_config/config/{sensor_type}/
+            # Matches QMC6309Config._QMC6309_ROOT path structure
+            sensor_type_dir = Path(__file__).parent.parent.parent / 'sensor_array_config' / 'sensor_array_config' / 'config' / self._sensor_type.lower()
+            sensor_type_dir.mkdir(parents=True, exist_ok=True)
+
+            # Run Phase 2 consistency calibration
+            results = batch_consistency_fit(
+                csv_dir=self.csv_dir,
+                output_path=sensor_type_dir / 'consistency_params.json',
+                auto_detect=True
+            )
+
+            # Print per-sensor report
+            rospy.loginfo("")
+            rospy.loginfo("%s", "=" * 60)
+            rospy.loginfo("Phase 2 Calibration Results (per sensor)")
+            rospy.loginfo("%s", "=" * 60)
+            rospy.loginfo(f"  {'Sensor':<8} {'D_ix':<10} {'D_iy':<10} {'D_iz':<10} {'e_ix':<9} {'e_iy':<9} {'e_iz':<9}")
+            rospy.loginfo("%s", "-" * 70)
+            for r in results:
+                D = np.array(r.D_i)
+                e = np.array(r.e_i)
+                rospy.loginfo(f"  {r.sensor_id:<8} {D[0,0]:<10.4f} {D[1,1]:<10.4f} {D[2,2]:<10.4f} "
+                              f"{e[0]:<+9.4f} {e[1]:<+9.4f} {e[2]:<+9.4f}")
+
+            # Run validation
+            D_list = [np.array(r.D_i) for r in results]
+            e_list = [np.array(r.e_i) for r in results]
+            validation = validate_consistency(self.csv_dir, D_list, e_list)
+
+            rospy.loginfo("")
+            rospy.loginfo("%s", "=" * 60)
+            rospy.loginfo("Validation Report")
+            rospy.loginfo("%s", "=" * 60)
+            rospy.loginfo(f"  {'Condition':<8} {'Axis':<6} {'校正前':<12} {'校正后':<12} {'改善'}")
+            rospy.loginfo("%s", "-" * 50)
+
+            improvements = []
+            for i in range(len(validation['conditions'])):
+                cond = validation['conditions'][i]
+                axis = validation['axes'][i]
+                std_b = validation['before'][i]
+                std_a = validation['after'][i]
+                imp = validation['improvement_pct'][i]
+                improvements.append(imp)
+                rospy.loginfo(f"  {cond:<8} {axis:<6} {std_b:<12.6f} {std_a:<12.6f} {imp:>+6.1f}%")
+
+            improvements_filtered = [x for x in improvements if x > -50]
+            rospy.loginfo("")
+            rospy.loginfo("  Summary:")
+            rospy.loginfo("  " + "-" * 40)
+            rospy.loginfo(f"    Mean improvement:   {np.mean(improvements_filtered):>+.1f}%")
+            rospy.loginfo(f"    Median improvement: {np.median(improvements_filtered):>+.1f}%")
+            rospy.loginfo(f"    Max improvement:    {np.max(improvements_filtered):>+.1f}%")
+            rospy.loginfo(f"    Min improvement:    {np.min(improvements_filtered):>+.1f}%")
+
+            rospy.loginfo("%s", "=" * 60)
+            rospy.loginfo("Phase 2 calibration complete. Consistency params saved.")
+            rospy.loginfo("Output: %s", sensor_type_dir / 'consistency_params.json')
+
+        except Exception as e:
+            rospy.logerr(f"Phase 2 calibration failed: {e}")
+            import traceback
+            traceback.print_exc()
+        rospy.loginfo("Consistency calibration complete.")
+
     def cleanup(self):
         """Cleanup on shutdown - run Phase 2 consistency post-processing."""
         rospy.loginfo("Running Phase 2 consistency post-processing...")
         try:
-            from calibration.lib.consistency_fit import batch_consistency_fit
-            import os
+            from consistency_fit import batch_consistency_fit, validate_consistency
+            import numpy as np
 
-            # Output to sensor_array_config/{sensor_type}/
-            sensor_type_dir = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                'sensor_array_config', 'config', self._sensor_type
-            )
-            os.makedirs(sensor_type_dir, exist_ok=True)
+            # Output to sensor_array_config/sensor_array_config/config/{sensor_type}/
+            # Matches QMC6309Config._QMC6309_ROOT path structure
+            sensor_type_dir = Path(__file__).parent.parent.parent / 'sensor_array_config' / 'sensor_array_config' / 'config' / self._sensor_type.lower()
+            sensor_type_dir.mkdir(parents=True, exist_ok=True)
 
             # Run Phase 2 consistency calibration
             results = batch_consistency_fit(
                 csv_dir=self.output_dir,
-                output_path=os.path.join(sensor_type_dir, 'consistency_params.json'),
+                output_path=sensor_type_dir / 'consistency_params.json',
                 auto_detect=True
             )
 
+            # Print per-sensor report
+            rospy.loginfo("")
+            rospy.loginfo("%s", "=" * 60)
+            rospy.loginfo("Phase 2 Calibration Results (per sensor)")
+            rospy.loginfo("%s", "=" * 60)
+            rospy.loginfo(f"  {'Sensor':<8} {'D_ix':<10} {'D_iy':<10} {'D_iz':<10} {'e_ix':<9} {'e_iy':<9} {'e_iz':<9}")
+            rospy.loginfo("%s", "-" * 70)
+            for r in results:
+                D = np.array(r.D_i)
+                e = np.array(r.e_i)
+                rospy.loginfo(f"  {r.sensor_id:<8} {D[0,0]:<10.4f} {D[1,1]:<10.4f} {D[2,2]:<10.4f} "
+                              f"{e[0]:<+9.4f} {e[1]:<+9.4f} {e[2]:<+9.4f}")
+
+            # Run validation
+            D_list = [np.array(r.D_i) for r in results]
+            e_list = [np.array(r.e_i) for r in results]
+            validation = validate_consistency(self.output_dir, D_list, e_list)
+
+            rospy.loginfo("")
+            rospy.loginfo("%s", "=" * 60)
+            rospy.loginfo("Validation Report")
+            rospy.loginfo("%s", "=" * 60)
+            rospy.loginfo(f"  {'Condition':<8} {'Axis':<6} {'校正前':<12} {'校正后':<12} {'改善'}")
+            rospy.loginfo("%s", "-" * 50)
+
+            improvements = []
+            for i in range(len(validation['conditions'])):
+                cond = validation['conditions'][i]
+                axis = validation['axes'][i]
+                std_b = validation['before'][i]
+                std_a = validation['after'][i]
+                imp = validation['improvement_pct'][i]
+                improvements.append(imp)
+                rospy.loginfo(f"  {cond:<8} {axis:<6} {std_b:<12.6f} {std_a:<12.6f} {imp:>+6.1f}%")
+
+            improvements_filtered = [x for x in improvements if x > -50]
+            rospy.loginfo("")
+            rospy.loginfo("  Summary:")
+            rospy.loginfo("  " + "-" * 40)
+            rospy.loginfo(f"    Mean improvement:   {np.mean(improvements_filtered):>+.1f}%")
+            rospy.loginfo(f"    Median improvement: {np.median(improvements_filtered):>+.1f}%")
+            rospy.loginfo(f"    Max improvement:    {np.max(improvements_filtered):>+.1f}%")
+            rospy.loginfo(f"    Min improvement:    {np.min(improvements_filtered):>+.1f}%")
+
+            rospy.loginfo("%s", "=" * 60)
             rospy.loginfo("Phase 2 calibration complete. Consistency params saved.")
+            rospy.loginfo("Output: %s", sensor_type_dir / 'consistency_params.json')
+
         except Exception as e:
             rospy.logerr(f"Phase 2 calibration failed: {e}")
             import traceback
@@ -441,7 +584,8 @@ if __name__ == '__main__':
     rospy.init_node('consistency_calibration', anonymous=True)
     try:
         calib = ConsistencyCalibration()
-        calib.run()
+        if not calib.skip_sampling:
+            calib.run()
     except rospy.ROSInterruptException:
         rospy.loginfo("Interrupted.")
     except Exception as e:

@@ -12,3 +12,6 @@ slot_frame_mapping:
   "2": "arm1_em_tcp_filt"
   "3": "null"
 # 注意：手动模式复用 slot_frame_mapping，slot 数量由 mode 决定（CVT=4, CCI=3）
+
+# 手动模式下的保存：rostopic pub /manual_trigger std_msgs/Empty "{}"
+# 手动模式下的退出：rostopic pub /manual_quit std_msgs/Empty "{}"

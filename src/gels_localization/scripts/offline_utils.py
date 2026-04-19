@@ -66,7 +66,7 @@ def generate_hall_data_from_dipole(sensor_ids, p_sensor_array, R_sensor_array, d
         p_sensor_global = p_sensor_array + R_sensor_array @ d_j
 
         # Compute magnetic field at sensor using dipole model (in global frame, Tesla)
-        b_global, _ = mag_dipole_model(p_sensor_global, m_Ci, source_p_Ci, order=3)
+        b_global, _ = mag_dipole_model(p_sensor_global, m_Ci, source_p_Ci, order=1)
 
         # Transform from global to sensor array frame: b_array = R.T @ b_global
         # This is the corrected sensor frame output (R_CORR is applied in serial_processor)
@@ -142,7 +142,7 @@ def json_to_request(json_path):
         ]
 
         pose = MockPose()
-        if 'pose' in sd:
+        if 'pose' in sd and sd['pose'] is not None:
             pose = MockPose(
                 x=sd['pose']['position']['x'],
                 y=sd['pose']['position']['y'],
@@ -261,7 +261,7 @@ def generate_synthetic_request_from_json(json_path, cycle_id=None, mode_override
     slot_data_list = []
 
     # Moment magnitudes
-    moment_magnitude = np.array([-120, -400, -300])
+    moment_magnitude = np.array([-120, -200, -200])
 
     for slot_idx in [0, 1, 2]:
         if slot_idx not in slot_dict:

@@ -54,6 +54,7 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
     N = D_cal.shape[1]
     M = len(B_meas_cell)
 
+
     # Precomputations
     # (Eq. 5) Null-space projection for local field estimation
     Q_bar = null(D_cal)

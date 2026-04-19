@@ -1,6 +1,5 @@
 {
   "description": "QMC6309 sensor array hardware parameters - sensor positions and rotation correction matrices",
-  "sensor_number": 12,
   "d_list": [
     [-0.001, 0.00105, -0.001],
     [-0.001, 0.00105,  0     ],
@@ -15,8 +14,22 @@
     [0.001,  -0.00105,  0     ],
     [0.001,  -0.00105,  0.001]
   ],
-  "r_corr_r1": [1, 0, 0, 0, 0, -1, 0, 1, 0],
-  "r_corr_r2": [1, 0, 0, 0, 0, 1, 0, -1, 0],
-  "r_corr_r3": [-1, 0, 0, 0, 0, 1, 0, 1, 0],
-  "r_corr_r4": [-1, 0, 0, 0, 0, -1, 0, -1, 0]
+  "R_CORR": [
+    {
+      "sensor_ids": [1, 2, 3],
+      "matrix": [1, 0, 0, 0, 0, -1, 0, 1, 0]
+    },
+    {
+      "sensor_ids": [4, 5, 6],
+      "matrix": [1, 0, 0, 0, 0, 1, 0, -1, 0]
+    },
+    {
+      "sensor_ids": [7, 8, 9],
+      "matrix": [-1, 0, 0, 0, 0, 1, 0, 1, 0]
+    },
+    {
+      "sensor_ids": [10, 11, 12],
+      "matrix": [-1, 0, 0, 0, 0, -1, 0, -1, 0]
+    }
+  ]
 }

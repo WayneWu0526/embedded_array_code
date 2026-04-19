@@ -68,7 +68,9 @@ def auto_detect_channel_axis_mapping(
         neg_path = Path(csv_dir) / data_files[f'ch{ch}_negative']
 
         if not pos_path.exists() or not neg_path.exists():
-            print(f"[WARN] CH{ch} data files not found, skipping auto-detection")
+            print(f"[WARN] CH{ch} data files not found, using default mapping")
+            default_map = {1: 'x', 2: 'y', 3: 'z'}
+            channel_to_axis[ch] = default_map[ch]
             continue
 
         pos_data = load_csv_data(pos_path, n_sensors)
@@ -79,6 +81,12 @@ def auto_detect_channel_axis_mapping(
         # 计算相对于背景的增量（取正负极性的平均幅度）
         delta_pos = pos_mean - bg_mean
         delta_neg = neg_mean - bg_mean
+
+        # 检查 delta 是否全为 0 (数据损坏)
+        if np.allclose(delta_pos, 0) and np.allclose(delta_neg, 0):
+            print(f"[WARN] CH{ch} data appears to be empty/zero, using default X axis")
+            channel_to_axis[ch] = 'x'
+            continue
 
         # 计算每个方向的平均绝对增量
         mean_abs_x = (np.abs(delta_pos[:, 0]).mean() + np.abs(delta_neg[:, 0]).mean()) / 2
@@ -168,9 +176,20 @@ def compute_stable_mean(data: np.ndarray, skip: int = 5) -> np.ndarray:
         mean: (12, 3) 稳定段均值
     """
     n = data.shape[0]
-    start = min(skip, n // 10)
-    end = max(n - skip, n * 9 // 10)
-    return data[start:end].mean(axis=0)
+    if n == 0:
+        return np.zeros((12, 3))
+    
+    start = min(skip, max(0, n // 10))
+    end = max(start + 1, min(n, n - skip, n * 9 // 10))
+    
+    # 打印切片范围以调试
+    # print(f"[DEBUG] compute_stable_mean: n={n}, slice=[{start}:{end}]")
+    
+    segment = data[start:end]
+    if segment.shape[0] == 0:
+        return np.zeros((12, 3))
+        
+    return segment.mean(axis=0)
 
 
 # ============== 核心算法 ==============
@@ -276,18 +295,7 @@ def consistency_fit(
     """
     执行一致性校准（单次调用完成全部计算）
 
-    注意: 输入数据应为已经过椭球校正和旋转校正的数据。
-    不再自动加载椭球参数，需在数据采集阶段确保使用校正后的数据。
-
-    Args:
-        csv_dir: CSV 文件所在目录
-        data_files: 可选，自定义数据文件映射
-        sensor_config: 可选，传感器配置对象
-        auto_detect: 是否自动检测通道-轴映射（默认True），
-                     为False时使用硬编码的 {ch1:z, ch2:y, ch3:x} 映射
-
-    Returns:
-        (D_list, e_list, fit_info)
+    注意: 始终尝试自动探测通道-轴映射，因为物理连接或信号源配置可能随实验变化。
     """
     if sensor_config is None:
         sensor_config = get_config("QMC6309")
@@ -304,16 +312,13 @@ def consistency_fit(
             'ch3_negative': 'consistency_calib_ch3_negative.csv',
         }
 
-    # 自动检测或使用硬编码映射
-    if auto_detect:
-        print("\n" + "=" * 60)
-        print("Auto-detecting channel-to-axis mapping...")
-        print("=" * 60)
-        channel_to_axis = auto_detect_channel_axis_mapping(csv_dir, data_files, n_sensors)
-        print("=" * 60)
-    else:
-        # 硬编码的默认映射（后备）
-        channel_to_axis = {1: 'z', 2: 'y', 3: 'x'}
+    # 始终尝试自动探测，除非明确禁用
+    print("\n" + "=" * 60)
+    print("Auto-detecting channel-to-axis mapping from current data...")
+    print("=" * 60)
+    channel_to_axis = auto_detect_channel_axis_mapping(csv_dir, data_files, n_sensors)
+    print("  Mapping found: {}".format(channel_to_axis))
+    print("=" * 60)
 
     # 根据检测结果构建 condition_map
     axis_to_cond_pos = {'x': FieldCondition.POS_X, 'y': FieldCondition.POS_Y, 'z': FieldCondition.POS_Z}
@@ -341,10 +346,10 @@ def consistency_fit(
     # 拟合 D_i 和 e_i
     D_list, e_list = fit_D_and_e(b_norm_means, n_sensors)
 
+    # 仅保留算法元数据，不再存储具体的通道映射
     fit_info = {
         'method': 'relative_consistency_fit',
         'n_sensors': n_sensors,
-        'conditions': ['ZERO', 'POS_X', 'NEG_X', 'POS_Y', 'NEG_Y', 'POS_Z', 'NEG_Z'],
     }
 
     return D_list, e_list, fit_info

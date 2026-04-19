@@ -11,6 +11,7 @@
 
     <!-- Arguments -->
     <arg name="sensor_type" default="QMC6309"/>
+    <arg name="skip_sampling" default="false"/>
 
     <!-- Start STM32 and sensor data collection (manual mode - no FY8300) -->
     <include file="$(find sensor_data_collection)/launch/stm32_manual.launch">
@@ -32,6 +33,7 @@
         <param name="samples_per_avg" value="10"/>
         <param name="max_samples" value="500"/>
         <param name="sensor_type" value="$(arg sensor_type)"/>
+        <param name="skip_sampling" value="$(arg skip_sampling)"/>
     </node>
 
 </launch>

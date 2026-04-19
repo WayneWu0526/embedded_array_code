@@ -30,6 +30,8 @@
 
     <!-- Arguments -->
     <arg name="sensor_type" default="QMC6309"/>
+    <arg name="skip_sampling" default="false"/>
+    <arg name="skip_csv_dir" default=""/>
 
     <!-- ===================== -->
     <!-- 1. Signal Generator (FY8300) -->
@@ -69,6 +71,10 @@
 
         <!-- Sensor type -->
         <param name="sensor_type" value="$(arg sensor_type)"/>
+
+        <!-- Skip sampling mode: set to true to skip data collection and run post-processing only -->
+        <param name="skip_sampling" value="$(arg skip_sampling)"/>
+        <param name="skip_csv_dir" value="$(arg skip_csv_dir)"/>
     </node>
 
 </launch>

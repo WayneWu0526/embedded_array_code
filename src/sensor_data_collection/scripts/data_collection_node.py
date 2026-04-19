@@ -21,7 +21,7 @@ from collections import deque
 from geometry_msgs.msg import TransformStamped, Pose
 from serial_processor.msg import StmUplink, StmDownlink
 from serial_processor.srv import GetHallData, GetHallDataResponse
-from std_msgs.msg import Bool, Float64
+from std_msgs.msg import Bool, Float64, Empty
 from sensor_data_collection.msg import SlotData, SensorReading
 from sensor_data_collection.srv import LocalizeCycle, LocalizeCycleRequest
 from sensor_array_config import get_config, SensorArrayConfig
@@ -243,12 +243,18 @@ class DataCollector:
         rospy.sleep(0.5)  # 等待 publisher/subscriber 连接建立
 
         if self.manual_trigger:
-            # Manual mode: start keyboard listener thread
+            # Manual mode: listen to ROS topics for trigger
             rospy.loginfo(f"DataCollector initialized: mode={self._get_mode_str()}, manual_trigger=true, "
                           f"num_positions={self.num_positions}, num_frames_to_average={self.num_frames_to_average}, "
                           f"slot_frame_mapping={self.slot_frame_map}")
-            self.keyboard_thread = threading.Thread(target=self._keyboard_loop, daemon=True)
-            self.keyboard_thread.start()
+            rospy.loginfo("  Subscribe to /manual_trigger (std_msgs/Empty) to save each position")
+            rospy.loginfo("  Subscribe to /manual_quit (std_msgs/Empty) to quit")
+            # Subscriber for manual trigger
+            self.trigger_sub = rospy.Subscriber('/manual_trigger', Empty, self._on_manual_trigger)
+            # Subscriber for quit
+            self.quit_sub = rospy.Subscriber('/manual_quit', Empty, self._on_manual_quit)
+            # Timer for status print (2 Hz)
+            self.status_timer = rospy.Timer(rospy.Duration(0.5), lambda _: self._print_status())
         else:
             # Auto mode: FY8300 + STM32 initialization
             # 初始化顺序（按 README）：
@@ -368,12 +374,14 @@ class DataCollector:
         if not self.manual_trigger:
             self._shutdown_fy8300()
 
-        # Wait for keyboard thread to finish (with timeout)
-        if hasattr(self, 'keyboard_thread') and self.keyboard_thread.is_alive():
-            rospy.loginfo("Waiting for keyboard thread to finish...")
-            self.keyboard_thread.join(timeout=2.0)
-            if self.keyboard_thread.is_alive():
-                rospy.logwarn("Keyboard thread did not finish in time")
+        # Shutdown manual mode subscribers/timer
+        if self.manual_trigger:
+            if hasattr(self, 'status_timer') and self.status_timer.is_started():
+                self.status_timer.stop()
+            if hasattr(self, 'trigger_sub'):
+                self.trigger_sub.unregister()
+            if hasattr(self, 'quit_sub'):
+                self.quit_sub.unregister()
 
         # Save any pending data
         if hasattr(self, 'slot_buffers') and self.slot_buffers:
@@ -521,6 +529,16 @@ class DataCollector:
         rospy.loginfo(f"[MANUAL] Slot {active_slot} saved! {remaining} positions remaining.")
         if remaining == 0:
             self._finalize_cycle_manual()
+
+    def _on_manual_trigger(self, msg):
+        """Callback for /manual_trigger topic: save current position"""
+        self._on_enter()
+
+    def _on_manual_quit(self, msg):
+        """Callback for /manual_quit topic: shutdown"""
+        rospy.loginfo("[MANUAL] Quit requested via /manual_quit topic.")
+        self._shutdown_requested.set()
+        rospy.signal_shutdown("Manual quit requested")
 
     def _finalize_cycle_manual(self):
         """Process completed manual cycle: call localization service and save to JSON"""

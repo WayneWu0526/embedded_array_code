@@ -27,21 +27,16 @@ Thumbs.db
 # big data files
 *.bag
 *.bag.active
-*.csv
 *.jpg
 *.png
 *.mp4
 
 # Calibration output data (raw and processed)
-data/
 plot/
 report/
 
 # Serial processor config - protect calibration params
-# (only track r_corr_params.json which has default values)
 src/serial_processor/config/*.json
-!src/serial_processor/config/r_corr_params.json
 
 # Also protect sensor_data_collection results
 src/sensor_data_collection/result/
-src/sensor_data_collection/result_backup/

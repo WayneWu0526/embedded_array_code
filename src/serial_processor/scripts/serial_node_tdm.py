@@ -103,28 +103,37 @@ class SerialNodeTDM:
 
     def _load_calibration_params(self):
         """Load Phase 1 (ellipsoid) and Phase 2 (consistency) calibration params from SensorArrayConfig."""
+        # Reset params
+        self.offset = {}
+        self.correction = {}
+        self.D_matrix = {}
+        self.e_bias = {}
+
+        # Load Phase 1 (ellipsoid)
         try:
             intrinsic = self._sensor_config.intrinsic
-            self.offset = {}
-            self.correction = {}
-            for sid, params in intrinsic.params.items():
-                self.offset[sid] = np.array(params.o_i)
-                self.correction[sid] = np.array(params.C_i)
-            rospy.loginfo(f"Loaded ellipsoid calibration for {len(self.offset)} sensors")
-
-            consistency = self._sensor_config.consistency
-            self.D_matrix = {}
-            self.e_bias = {}
-            for sid, params in consistency.params.items():
-                self.D_matrix[sid] = np.array(params.D_i)
-                self.e_bias[sid] = np.array(params.e_i)
-            rospy.loginfo(f"Loaded consistency calibration for {len(self.D_matrix)} sensors")
+            if intrinsic and intrinsic.params:
+                for sid, params in intrinsic.params.items():
+                    self.offset[sid] = np.array(params.o_i)
+                    self.correction[sid] = np.array(params.C_i)
+                rospy.loginfo(f"Loaded ellipsoid calibration for {len(self.offset)} sensors")
+            else:
+                rospy.logwarn("No intrinsic (ellipsoid) parameters found.")
         except Exception as e:
-            rospy.logwarn(f"Failed to load calibration params: {e}")
-            self.offset = {}
-            self.correction = {}
-            self.D_matrix = {}
-            self.e_bias = {}
+            rospy.logwarn(f"Failed to load ellipsoid params: {e}")
+
+        # Load Phase 2 (consistency)
+        try:
+            consistency = self._sensor_config.consistency
+            if consistency and consistency.params:
+                for sid, params in consistency.params.items():
+                    self.D_matrix[sid] = np.array(params.D_i)
+                    self.e_bias[sid] = np.array(params.e_i)
+                rospy.loginfo(f"Loaded consistency calibration for {len(self.D_matrix)} sensors")
+            else:
+                rospy.logwarn("No consistency parameters found.")
+        except Exception as e:
+            rospy.logwarn(f"Failed to load consistency params: {e}")
 
     def _load_sensor_array_params(self):
         """Load d_list and R_CORR from SensorArrayConfig."""
@@ -135,10 +144,13 @@ class SerialNodeTDM:
             self._n_sensors = manifest.n_sensors
             self._n_groups = manifest.n_groups
             self._sensors_per_group = manifest.sensors_per_group
-            # Build R_CORR dict: group_index (1-based) -> np.array(3x3)
+            # Build R_CORR dict: sensor_id -> np.array(3x3)
+            # Each R_CORR entry has sensor_ids and a 9-element matrix
             self.R_CORR = {}
-            for i, r_corr_flat in enumerate(hw.R_CORR):
-                self.R_CORR[i + 1] = np.array(r_corr_flat).reshape(3, 3, order='F')
+            for entry in hw.R_CORR:
+                mat = np.array(entry.matrix).reshape(3, 3, order='F')
+                for sid in entry.sensor_ids:
+                    self.R_CORR[sid] = mat
             rospy.loginfo(f"Loaded sensor array params: {self._n_sensors} sensors, {self._n_groups} groups")
         except Exception as e:
             rospy.logwarn(f"Failed to load sensor array params: {e}")
@@ -149,11 +161,11 @@ class SerialNodeTDM:
             self._sensors_per_group = 0
             self.R_CORR = {}
 
-        # Build sensor -> group lookup
-        self._sensor_to_group = {
-            sid: self._sensor_config.get_group_for_sensor(sid)
-            for sid in self._sensor_config.get_sensor_ids()
-        }
+        # Build sensor -> group lookup (group index is position in R_CORR list)
+        self._sensor_to_group = {}
+        for idx, entry in enumerate(hw.R_CORR):
+            for sid in entry.sensor_ids:
+                self._sensor_to_group[sid] = idx + 1
 
     def _apply_ellipsoid_correction(self, raw_x, raw_y, raw_z, sensor_id):
         """Apply ellipsoid correction to raw sensor data.
@@ -357,16 +369,16 @@ class SerialNodeTDM:
                             for s in msg.sensor_data:
                                 cx, cy, cz = self._apply_ellipsoid_correction(s.x, s.y, s.z, s.id)
                                 # Apply R_CORR rotation (transform from sensor-local to reference frame)
-                                group = self._sensor_to_group.get(s.id, None)
-                                if group is not None and group in self.R_CORR:
-                                    b_rot = self.R_CORR[group] @ np.array([cx, cy, cz])
+                                if s.id in self.R_CORR:
+                                    b_rot = self.R_CORR[s.id] @ np.array([cx, cy, cz])
                                     cx, cy, cz = b_rot[0], b_rot[1], b_rot[2]
-                                # Save intermediate result (ellipsoid + R_CORR, before consistency)
                                 ellipsoid_rotated_sensors.append(SensorData(id=s.id, x=cx, y=cy, z=cz))
+
                                 # Apply consistency correction: D_i * b + e_i
                                 if s.id in self.D_matrix and s.id in self.e_bias:
                                     b_cons = self.D_matrix[s.id] @ np.array([cx, cy, cz]) + self.e_bias[s.id]
                                     cx, cy, cz = b_cons[0], b_cons[1], b_cons[2]
+                                
                                 corrected_sensors.append(SensorData(id=s.id, x=cx, y=cy, z=cz))
 
                             # Create ellipsoid_rotated message (intermediate: after ellipsoid + R_CORR, before consistency)
