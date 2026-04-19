@@ -23,13 +23,15 @@
   </node>
 
   <!-- ===================== -->
-  <!-- 3. Signal Generator (FY8300) - Auto mode only -->
+  <!-- 3. Signal Generator (FY8300) -->
   <!-- ===================== -->
-  <node if="$(eval not arg('manual_trigger'))" name="fy8300" pkg="signal_generator" type="fy8300_node" output="screen">
-    <!-- 根据 mode 加载参数到节点私有空间 -->
-    <rosparam if="$(eval mode == 'CVT')" command="load"
+  <!-- manual_trigger=true 时使用 manual 配置，否则根据 mode 选择 CVT/CCI 配置 -->
+  <node name="fy8300" pkg="signal_generator" type="fy8300_node" output="screen">
+    <rosparam if="$(eval arg('manual_trigger'))" command="load"
+              file="$(find sensor_data_collection)/config/signal_params_manual.yaml"/>
+    <rosparam if="$(eval not arg('manual_trigger') and arg('mode') == 'CVT')" command="load"
               file="$(find sensor_data_collection)/config/signal_params_cvt.yaml"/>
-    <rosparam if="$(eval mode == 'CCI')" command="load"
+    <rosparam if="$(eval not arg('manual_trigger') and arg('mode') == 'CCI')" command="load"
               file="$(find sensor_data_collection)/config/signal_params_cci.yaml"/>
   </node>
 

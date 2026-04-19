@@ -28,13 +28,15 @@ from sensor_array_config import get_config, SensorArrayConfig
 
 
 # Mode constants
-MODE_CVT = 0x01  # Constant Voltage Mode: 4 slots
-MODE_CCI = 0x02  # Constant Current Mode: 3 slots
+MODE_CVT = 0x01  # Constant Voltage Mode: 4 slots (3 EM coils + 1 background)
+MODE_CCI = 0x02  # Constant Current Mode: 3 slots (3 EM coils, no background)
 MODE_MANUAL = 0x00  # Manual trigger mode (continuous data)
 
-# Mode to slot count - now computed per-instance from sensor config in DataCollector.__init__()
-# Format: {MODE_CVT: n_groups + 1 (background slot), MODE_CCI: n_groups}
-# Kept as fallback default for CycleBuffer before sensor config is available
+# Protocol-defined slot counts (independent of sensor grouping/n_groups)
+_MODE_SLOT_COUNT = {
+    MODE_CVT: 4,   # 3 coils + 1 background slot
+    MODE_CCI: 3,   # 3 coils, no background slot
+}
 
 
 class SlotBuffer:
@@ -135,12 +137,6 @@ class DataCollector:
         self._sensor_config: SensorArrayConfig = get_config(self._sensor_type)
         rospy.loginfo(f"Using sensor type: {self._sensor_type}, n_sensors={self._sensor_config.manifest.n_sensors}")
 
-        # Compute MODE_SLOT_COUNT from config
-        self._MODE_SLOT_COUNT = {
-            MODE_CVT: self._sensor_config.manifest.n_groups + 1,
-            MODE_CCI: self._sensor_config.manifest.n_groups,
-        }
-
         # Parameters
         self.num_cycles = int(rospy.get_param('~num_cycles', 10))
         if self.num_cycles < 0:
@@ -170,18 +166,9 @@ class DataCollector:
 
         # Manual mode specific parameters
         if self.manual_trigger:
-            # num_positions: CVT=4 slots, CCI=3 slots, can be overridden
-            self.num_positions = int(rospy.get_param('~num_positions', self._MODE_SLOT_COUNT[self.mode]))
+            self.num_positions = _MODE_SLOT_COUNT[self.mode]  # CVT=4, CCI=3, derived from mode
             self.num_frames_to_average = int(rospy.get_param('~num_frames_to_average', 10))
-            # Load manual mode slot->frame mapping
-            raw_manual_map = rospy.get_param('~manual_slot_frame_mapping', {})
-            self.manual_slot_frame_map = {}
-            for k, v in raw_manual_map.items():
-                key = int(k)
-                if v in ('none', 'null', None):
-                    self.manual_slot_frame_map[key] = None
-                else:
-                    self.manual_slot_frame_map[key] = v
+            # Manual mode reuses slot_frame_mapping (same as auto mode)
             # Manual mode uses Mode 0x00 (continuous)
             self.stm_mode = MODE_MANUAL
             # Manual mode cycle tracking
@@ -191,7 +178,7 @@ class DataCollector:
             self.slot_buffers = [deque(maxlen=self.num_frames_to_average) for _ in range(self.num_positions)]
         else:
             # Calculate cycle_time: CVT=4 slots, CCI=3 slots
-            num_slots = self._MODE_SLOT_COUNT[self.mode]
+            num_slots = _MODE_SLOT_COUNT[self.mode]
             self.cycle_time = num_slots * (self.settling_time + self.sampling_time)
             # Auto mode uses CVT/CCI mode for STM32
             self.stm_mode = self.mode
@@ -259,7 +246,7 @@ class DataCollector:
             # Manual mode: start keyboard listener thread
             rospy.loginfo(f"DataCollector initialized: mode={self._get_mode_str()}, manual_trigger=true, "
                           f"num_positions={self.num_positions}, num_frames_to_average={self.num_frames_to_average}, "
-                          f"manual_slot_frame_mapping={self.manual_slot_frame_map}")
+                          f"slot_frame_mapping={self.slot_frame_map}")
             self.keyboard_thread = threading.Thread(target=self._keyboard_loop, daemon=True)
             self.keyboard_thread.start()
         else:
@@ -302,7 +289,7 @@ class DataCollector:
             # Determine which frames to wait for based on mode
             if self.manual_trigger:
                 # Manual mode: only wait for frames that are actually used
-                required_frames = set(self.manual_slot_frame_map.values())
+                required_frames = set(self.slot_frame_map.values())
                 required_frames.discard(None)  # Remove null entries
                 required_frames.add('sensor_array_filt')  # Always need ground truth
             else:
@@ -337,10 +324,10 @@ class DataCollector:
         msg.mode = int(self.stm_mode)
         msg.bitmap = self.bitmap
         if self.manual_trigger:
-            # Manual mode: continuous data, timing params set to 0
-            msg.settling_time = 0
-            msg.cycle_time = 0
-            msg.cycle_num = 0
+            # Manual mode: use same timing params as stm32_init.py to avoid STM32 parameter error
+            msg.settling_time = 100   # 1ms (0.01ms units)
+            msg.cycle_time = 10000    # 100ms
+            msg.cycle_num = 1
         else:
             msg.settling_time = self.settling_time
             msg.cycle_time = self.cycle_time
@@ -514,8 +501,8 @@ class DataCollector:
         # Average the sensor data
         avg_sensor_data = self._average_sensor_data(buffer)
 
-        # Look up pose for this slot using manual_slot_frame_mapping
-        frame = self.manual_slot_frame_map.get(active_slot)
+        # Look up pose for this slot using slot_frame_mapping (reused in manual mode)
+        frame = self.slot_frame_map.get(active_slot)
         pose = self._lookup_pose(frame) if frame else None
 
         # Save slot data
@@ -663,7 +650,7 @@ class DataCollector:
         if self.current_cycle is None or self.current_cycle.cycle_id != cycle_id:
             self.current_cycle = CycleBuffer(
                 cycle_id, self.mode, self.bitmap,
-                num_slots=self._MODE_SLOT_COUNT[self.mode],
+                num_slots=_MODE_SLOT_COUNT[self.mode],
                 n_sensors=self._sensor_config.manifest.n_sensors
             )
 
