@@ -45,6 +45,11 @@ class ConsistencyCalibration:
         self.skip_sampling = rospy.get_param('~skip_sampling', False)
         self.skip_csv_dir = rospy.get_param('~skip_csv_dir', None)  # For skip_sampling mode
 
+        # Load ellipsoid correction parameters (intrinsic params) for post-processing
+        from sensor_array_config.base import get_config
+        self._sensor_config = get_config(self._sensor_type)
+        self._intrinsic_params = self._sensor_config.intrinsic  # Contains o_i and C_i for each sensor
+
         # State
         self.latest_sensor_data = None
         self.mutex = threading.Lock()
@@ -75,9 +80,9 @@ class ConsistencyCalibration:
             for i in range(1, 4)
         ]
 
-        # Subscriber for STM32 (ellipsoid + rotation corrected data)
+        # Subscriber for STM32 (raw data - we apply ellipsoid correction in post-processing)
         self.sub_stm_uplink = rospy.Subscriber(
-            'stm_uplink_ellipsoid_rotated', StmUplink, self._stm_uplink_callback, queue_size=100)
+            'stm_uplink_raw', StmUplink, self._stm_uplink_callback, queue_size=100)
 
         # Register shutdown hook for cleanup
         rospy.on_shutdown(self.cleanup)
@@ -379,11 +384,18 @@ class ConsistencyCalibration:
             sensor_type_dir.mkdir(parents=True, exist_ok=True)
 
             # Run Phase 2 consistency calibration
-            results = batch_consistency_fit(
+            # Pass intrinsic_params so ellipsoid correction is applied to raw CSV data
+            results, amp_factor = batch_consistency_fit(
                 csv_dir=self.csv_dir,
                 output_path=sensor_type_dir / 'consistency_params.json',
-                auto_detect=True
+                auto_detect=True,
+                intrinsic_params=self._intrinsic_params,
+                logger=rospy.loginfo
             )
+
+            # Print amp factor info
+            if amp_factor is not None:
+                rospy.loginfo("  Amplification factor (background): %.4f", amp_factor)
 
             # Print per-sensor report
             rospy.loginfo("")
@@ -452,10 +464,12 @@ class ConsistencyCalibration:
             sensor_type_dir.mkdir(parents=True, exist_ok=True)
 
             # Run Phase 2 consistency calibration
+            # Pass intrinsic_params so ellipsoid correction is applied to raw CSV data
             results = batch_consistency_fit(
                 csv_dir=self.output_dir,
                 output_path=sensor_type_dir / 'consistency_params.json',
-                auto_detect=True
+                auto_detect=True,
+                intrinsic_params=self._intrinsic_params
             )
 
             # Print per-sensor report

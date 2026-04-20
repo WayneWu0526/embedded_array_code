@@ -51,16 +51,12 @@ class SerialNodeTDM:
         self.ser = None
         self.connect()
 
-        # Publisher for uplink data (corrected: ellipsoid + R_CORR)
+        # Publisher for uplink data (fully corrected: ellipsoid + R_CORR + consistency)
         self.pub = rospy.Publisher('stm_uplink', StmUplink, queue_size=100)
-        # Publisher for intermediate data: ellipsoid + R_CORR correction, before consistency correction
-        self.pub_ellipsoid_rotated = rospy.Publisher('stm_uplink_ellipsoid_rotated', StmUplink, queue_size=100)
-        # Publisher for raw uplink data (uncorrected, for archive/Phase 2-5)
+        # Publisher for raw uplink data (uncorrected, for archive/Phase 2 calibration)
         self.pub_raw = rospy.Publisher('stm_uplink_raw', StmUplink, queue_size=100)
-        # Publisher for magnetic field magnitude of each sensor
+        # Publisher for magnetic field magnitude of corrected data
         self.pub_magnitude = rospy.Publisher('stm_magnitude', Float32MultiArray, queue_size=100)
-        # Publisher for ellipsoid_rotated magnetic field magnitude (intermediate)
-        self.pub_magnitude_ellipsoid_rotated = rospy.Publisher('stm_magnitude_ellipsoid_rotated', Float32MultiArray, queue_size=100)
         # Publisher for raw magnetic field magnitude (uncorrected)
         self.pub_magnitude_raw = rospy.Publisher('stm_magnitude_raw', Float32MultiArray, queue_size=100)
 
@@ -108,6 +104,7 @@ class SerialNodeTDM:
         self.correction = {}
         self.D_matrix = {}
         self.e_bias = {}
+        self._amp_factor = None  # 统一缩放因子 (方案B)
 
         # Load Phase 1 (ellipsoid)
         try:
@@ -129,7 +126,11 @@ class SerialNodeTDM:
                 for sid, params in consistency.params.items():
                     self.D_matrix[sid] = np.array(params.D_i)
                     self.e_bias[sid] = np.array(params.e_i)
-                rospy.loginfo(f"Loaded consistency calibration for {len(self.D_matrix)} sensors")
+                self._amp_factor = consistency.amp_factor
+                if self._amp_factor is not None:
+                    rospy.loginfo(f"Loaded consistency calibration for {len(self.D_matrix)} sensors (amp_factor={self._amp_factor:.4f})")
+                else:
+                    rospy.loginfo(f"Loaded consistency calibration for {len(self.D_matrix)} sensors (no amp_factor)")
             else:
                 rospy.logwarn("No consistency parameters found.")
         except Exception as e:
@@ -363,8 +364,7 @@ class SerialNodeTDM:
                             raw_magnitudes.data = [math.sqrt(s.x**2 + s.y**2 + s.z**2) for s in msg.sensor_data]
                             self.pub_magnitude_raw.publish(raw_magnitudes)
 
-                            # Apply ellipsoid correction to sensor data
-                            ellipsoid_rotated_sensors = []
+                            # Apply full correction: ellipsoid + R_CORR + consistency
                             corrected_sensors = []
                             for s in msg.sensor_data:
                                 cx, cy, cz = self._apply_ellipsoid_correction(s.x, s.y, s.z, s.id)
@@ -372,32 +372,15 @@ class SerialNodeTDM:
                                 if s.id in self.R_CORR:
                                     b_rot = self.R_CORR[s.id] @ np.array([cx, cy, cz])
                                     cx, cy, cz = b_rot[0], b_rot[1], b_rot[2]
-                                ellipsoid_rotated_sensors.append(SensorData(id=s.id, x=cx, y=cy, z=cz))
-
                                 # Apply consistency correction: D_i * b + e_i
                                 if s.id in self.D_matrix and s.id in self.e_bias:
                                     b_cons = self.D_matrix[s.id] @ np.array([cx, cy, cz]) + self.e_bias[s.id]
                                     cx, cy, cz = b_cons[0], b_cons[1], b_cons[2]
-                                
+                                # Apply amp_factor scaling (方案B: 恢复到raw水平)
+                                # amp = ||b_corr|| / ||b_raw||, so divide to recover raw scale
+                                if self._amp_factor is not None and self._amp_factor != 0:
+                                    cx, cy, cz = cx / self._amp_factor, cy / self._amp_factor, cz / self._amp_factor
                                 corrected_sensors.append(SensorData(id=s.id, x=cx, y=cy, z=cz))
-
-                            # Create ellipsoid_rotated message (intermediate: after ellipsoid + R_CORR, before consistency)
-                            ellipsoid_rotated_msg = StmUplink()
-                            ellipsoid_rotated_msg.header = msg.header
-                            ellipsoid_rotated_msg.cycle_id = msg.cycle_id
-                            ellipsoid_rotated_msg.slot = msg.slot
-                            ellipsoid_rotated_msg.bitmap = msg.bitmap
-                            ellipsoid_rotated_msg.timestamp = msg.timestamp
-                            ellipsoid_rotated_msg.sensor_data = ellipsoid_rotated_sensors
-                            ellipsoid_rotated_msg.cycle_end = msg.cycle_end
-
-                            # Publish ellipsoid_rotated data
-                            self.pub_ellipsoid_rotated.publish(ellipsoid_rotated_msg)
-
-                            # Publish magnetic field magnitude (based on ellipsoid_rotated data)
-                            magnitudes_ellipsoid_rotated = Float32MultiArray()
-                            magnitudes_ellipsoid_rotated.data = [math.sqrt(s.x**2 + s.y**2 + s.z**2) for s in ellipsoid_rotated_msg.sensor_data]
-                            self.pub_magnitude_ellipsoid_rotated.publish(magnitudes_ellipsoid_rotated)
 
                             # Create corrected message
                             corrected_msg = StmUplink()

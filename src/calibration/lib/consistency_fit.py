@@ -19,7 +19,123 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, asdict
 
-from sensor_array_config.base import get_config, SensorArrayConfig, ConsistencyParamsSet, ConsistencyParams
+from sensor_array_config.base import get_config, SensorArrayConfig, ConsistencyParamsSet, ConsistencyParams, IntrinsicParamsSet
+
+
+# ============== 椭球校正与放大系数 ==============
+def apply_ellipsoid_correction_to_data(b_raw: np.ndarray, o_i: np.ndarray, C_i: np.ndarray) -> np.ndarray:
+    """
+    对原始传感器数据进行椭球校正
+
+    公式: b_corr = C_i * (b_raw - o_i)
+
+    Args:
+        b_raw: (N, 3) 原始数据
+        o_i: (3,) offset 向量
+        C_i: (3, 3) 校正矩阵
+
+    Returns:
+        b_corr: (N, 3) 校正后数据
+    """
+    b_raw = np.asarray(b_raw)
+    o_i = np.asarray(o_i)
+    C_i = np.asarray(C_i)
+    b_centered = b_raw - o_i
+    b_corr = b_centered @ C_i.T
+    return b_corr
+
+
+def compute_amplification_factor(b_raw: np.ndarray, b_corr: np.ndarray) -> Dict[str, float]:
+    """
+    计算放大系数
+
+    对比原始数据和校正后数据的磁场向量模长
+
+    Args:
+        b_raw: (N, 3) 原始数据
+        b_corr: (N, 3) 校正后数据
+
+    Returns:
+        Dict with raw_norm, corr_norm, and amplification_factor
+    """
+    b_raw = np.asarray(b_raw)
+    b_corr = np.asarray(b_corr)
+
+    # 计算每个样本的向量模长
+    raw_norms = np.linalg.norm(b_raw, axis=1)
+    corr_norms = np.linalg.norm(b_corr, axis=1)
+
+    raw_norm_mean = float(np.mean(raw_norms))
+    corr_norm_mean = float(np.mean(corr_norms))
+
+    # 放大系数 = 校正后模长均值 / 原始数据模长均值
+    amp_factor = corr_norm_mean / (raw_norm_mean + 1e-10)
+
+    return {
+        'raw_norm_mean': raw_norm_mean,
+        'corr_norm_mean': corr_norm_mean,
+        'amplification_factor': amp_factor
+    }
+
+
+def apply_ellipsoid_correction_to_csv(
+    csv_path: Path,
+    intrinsic_params: IntrinsicParamsSet,
+    n_sensors: int = 12
+) -> np.ndarray:
+    """
+    对CSV文件中的原始数据进行椭球校正
+
+    Args:
+        csv_path: CSV文件路径
+        intrinsic_params: 椭球校正参数集合
+        n_sensors: 传感器数量
+
+    Returns:
+        corrected_data: (N, n_sensors, 3) 校正后的数据
+    """
+    import pandas as pd
+
+    df = pd.read_csv(csv_path)
+    cols = [c for c in df.columns if c.startswith('sensor_')]
+    raw_data = df[cols].values
+
+    n_samples = raw_data.shape[0]
+    corrected_data = np.zeros((n_samples, n_sensors, 3))
+
+    for i in range(n_sensors):
+        sensor_id = i + 1
+        o_i = np.array(intrinsic_params.params[sensor_id].o_i)
+        C_i = np.array(intrinsic_params.params[sensor_id].C_i)
+
+        # 提取该传感器所有样本的原始数据 (N, 3)
+        sensor_raw = raw_data[:, i*3:(i+1)*3]
+        # 应用椭球校正
+        corrected_data[:, i, :] = apply_ellipsoid_correction_to_data(sensor_raw, o_i, C_i)
+
+    return corrected_data
+
+
+def load_csv_data_raw(csv_path: Path, n_sensors: int = 12) -> np.ndarray:
+    """
+    加载CSV并提取传感器原始数据（不进行任何校正）
+
+    Args:
+        csv_path: CSV 文件路径
+        n_sensors: 传感器数量
+
+    Returns:
+        data: (N_samples, n_sensors, 3) 原始数据
+    """
+    import pandas as pd
+    df = pd.read_csv(csv_path)
+    cols = [c for c in df.columns if c.startswith('sensor_')]
+    data = df[cols].values
+    n = data.shape[0]
+    reshaped = np.zeros((n, n_sensors, 3))
+    for i in range(n_sensors):
+        reshaped[:, i, :] = data[:, i*3:(i+1)*3]
+    return reshaped
 
 
 # ============== 通道-轴 自动检测 ==============
@@ -291,12 +407,30 @@ def consistency_fit(
     data_files: Dict[str, str] = None,
     sensor_config: SensorArrayConfig = None,
     auto_detect: bool = True,
-) -> Tuple[List[np.ndarray], List[np.ndarray], Dict]:
+    intrinsic_params: IntrinsicParamsSet = None,
+    logger=None,
+) -> Tuple[List[np.ndarray], List[np.ndarray], Dict, Optional[float]]:
     """
     执行一致性校准（单次调用完成全部计算）
 
     注意: 始终尝试自动探测通道-轴映射，因为物理连接或信号源配置可能随实验变化。
+
+    Args:
+        csv_dir: CSV 文件所在目录
+        data_files: 数据文件映射字典
+        sensor_config: 传感器配置对象
+        auto_detect: 是否自动检测通道-轴映射
+        intrinsic_params: 椭球校正参数（如果提供，则对原始数据进行椭球校正）
+        logger: 可选的日志函数，用于替代 print() (e.g., rospy.loginfo)
+
+    Returns:
+        D_list, e_list, fit_info, amp_factor
+        amp_factor: 背景条件的放大系数 (用于方案B逆缩放)，如果没有则返回 None
     """
+    if logger is None:
+        def logger(*args, **kwargs):
+            print(*args, **kwargs)
+
     if sensor_config is None:
         sensor_config = get_config("QMC6309")
     n_sensors = sensor_config.manifest.n_sensors
@@ -313,12 +447,12 @@ def consistency_fit(
         }
 
     # 始终尝试自动探测，除非明确禁用
-    print("\n" + "=" * 60)
-    print("Auto-detecting channel-to-axis mapping from current data...")
-    print("=" * 60)
+    logger("\n" + "=" * 60)
+    logger("Auto-detecting channel-to-axis mapping from current data...")
+    logger("=" * 60)
     channel_to_axis = auto_detect_channel_axis_mapping(csv_dir, data_files, n_sensors)
-    print("  Mapping found: {}".format(channel_to_axis))
-    print("=" * 60)
+    logger("  Mapping found: {}".format(channel_to_axis))
+    logger("=" * 60)
 
     # 根据检测结果构建 condition_map
     axis_to_cond_pos = {'x': FieldCondition.POS_X, 'y': FieldCondition.POS_Y, 'z': FieldCondition.POS_Z}
@@ -329,19 +463,53 @@ def consistency_fit(
         condition_map[f'ch{ch}_positive'] = axis_to_cond_pos[axis]
         condition_map[f'ch{ch}_negative'] = axis_to_cond_neg[axis]
 
-    print(f"\n  Channel-Axis mapping: {channel_to_axis}")
-    print(f"  Condition map: {condition_map}")
+    logger(f"\n  Channel-Axis mapping: {channel_to_axis}")
+    logger(f"  Condition map: {condition_map}")
 
-    # 加载并处理数据（数据已经是 ellipsoid + rotation 校正后的）
+    # 加载并处理数据
+    # 如果提供了 intrinsic_params，则对原始数据进行椭球校正
     b_norm_means = {}
+    amp_factors = {}  # 存储每个条件的放大系数
+
     for name, filename in data_files.items():
         csv_path = Path(csv_dir) / filename
         if not csv_path.exists():
             raise FileNotFoundError(f"CSV not found: {csv_path}")
 
-        sensors_raw = load_csv_data(csv_path, n_sensors)
-        # 数据已经是 ellipsoid + rotation 校正后的，直接使用
-        b_norm_means[condition_map[name]] = compute_stable_mean(sensors_raw)
+        sensors_raw = load_csv_data_raw(csv_path, n_sensors)  # 加载原始数据
+
+        if intrinsic_params is not None:
+            # 对每个传感器应用椭球校正
+            sensors_corr = np.zeros_like(sensors_raw)
+            for sid in range(1, n_sensors + 1):
+                o_i = np.array(intrinsic_params.params[sid].o_i)
+                C_i = np.array(intrinsic_params.params[sid].C_i)
+                sensors_corr[:, sid-1, :] = apply_ellipsoid_correction_to_data(
+                    sensors_raw[:, sid-1, :], o_i, C_i
+                )
+
+            # 计算放大系数（使用稳定段数据）
+            raw_mean = compute_stable_mean(sensors_raw)
+            corr_mean = compute_stable_mean(sensors_corr)
+            amp_factor = compute_amplification_factor(raw_mean, corr_mean)
+            amp_factors[condition_map[name]] = amp_factor
+
+            b_norm_means[condition_map[name]] = corr_mean
+        else:
+            # 不进行椭球校正，直接使用
+            b_norm_means[condition_map[name]] = compute_stable_mean(sensors_raw)
+
+    # 打印放大系数
+    if intrinsic_params is not None:
+        logger("\n" + "=" * 60)
+        logger("Amplification Factor (after ellipsoid correction)")
+        logger("=" * 60)
+        logger(f"  {'Condition':<12} {'Raw Norm':>12} {'Corr Norm':>12} {'Amp Factor':>12}")
+        logger("  " + "-" * 50)
+        for cond, amp in amp_factors.items():
+            cond_str = FieldCondition.to_string(cond)
+            logger(f"  {cond_str:<12} {amp['raw_norm_mean']:>12.6f} {amp['corr_norm_mean']:>12.6f} {amp['amplification_factor']:>12.4f}")
+        logger("=" * 60)
 
     # 拟合 D_i 和 e_i
     D_list, e_list = fit_D_and_e(b_norm_means, n_sensors)
@@ -352,7 +520,10 @@ def consistency_fit(
         'n_sensors': n_sensors,
     }
 
-    return D_list, e_list, fit_info
+    # 获取背景条件的放大系数 (用于方案B)
+    amp_factor_background = amp_factors.get(FieldCondition.ZERO, {}).get('amplification_factor')
+
+    return D_list, e_list, fit_info, amp_factor_background
 
 
 def batch_consistency_fit(
@@ -360,7 +531,9 @@ def batch_consistency_fit(
     output_path: Path = None,
     sensor_config: SensorArrayConfig = None,
     auto_detect: bool = True,
-) -> List[ConsistencyResult]:
+    intrinsic_params: IntrinsicParamsSet = None,
+    logger=None,
+) -> Tuple[List[ConsistencyResult], Optional[float]]:
     """
     批量处理一致性校准，返回完整结果
 
@@ -369,15 +542,23 @@ def batch_consistency_fit(
         output_path: 可选，输出 JSON 路径
         sensor_config: 可选，传感器配置对象
         auto_detect: 是否自动检测通道-轴映射（默认True）
+        intrinsic_params: 可选，椭球校正参数（如果提供，则对原始数据进行椭球校正）
+        logger: 可选的日志函数 (e.g., rospy.loginfo)
 
     Returns:
-        List of ConsistencyResult for all n_sensors sensors
+        (results, amp_factor_background)
+        results: List of ConsistencyResult for all n_sensors sensors
+        amp_factor_background: 背景条件放大系数 (用于方案B逆缩放)
     """
     if sensor_config is None:
         sensor_config = get_config("QMC6309")
     n_sensors = sensor_config.manifest.n_sensors
 
-    D_list, e_list, fit_info = consistency_fit(csv_dir, data_files=None, sensor_config=sensor_config, auto_detect=auto_detect)
+    D_list, e_list, fit_info, amp_factor_background = consistency_fit(
+        csv_dir, data_files=None, sensor_config=sensor_config,
+        auto_detect=auto_detect, intrinsic_params=intrinsic_params,
+        logger=logger
+    )
 
     results = []
     for i in range(n_sensors):
@@ -391,11 +572,11 @@ def batch_consistency_fit(
         )
         results.append(result)
 
-    # 保存参数
+    # 保存参数 (包含 amp_factor)
     if output_path is not None:
-        save_consistency_params(results, output_path, sensor_config)
+        save_consistency_params(results, output_path, sensor_config, amp_factor_background)
 
-    return results
+    return results, amp_factor_background
 
 
 def validate_consistency(
@@ -480,14 +661,18 @@ def save_consistency_params(
     results: List[ConsistencyResult],
     output_path: Path,
     sensor_config: SensorArrayConfig = None,
+    amp_factor: float = None,
 ):
     """保存一致性校准参数到 JSON 文件"""
     if sensor_config is None:
         sensor_config = get_config("QMC6309")
-    params_set = ConsistencyParamsSet(params={
-        r.sensor_id: ConsistencyParams(D_i=r.D_i, e_i=r.e_i)
-        for r in results
-    })
+    params_set = ConsistencyParamsSet(
+        params={
+            r.sensor_id: ConsistencyParams(D_i=r.D_i, e_i=r.e_i)
+            for r in results
+        },
+        amp_factor=amp_factor
+    )
     params_set.to_json(str(output_path))
     print(f"Consistency params saved to: {output_path}")
 
@@ -495,7 +680,7 @@ def save_consistency_params(
 def load_consistency_params(
     params_path: Path,
     sensor_config: SensorArrayConfig = None,
-) -> Tuple[Dict[int, np.ndarray], Dict[int, np.ndarray]]:
+) -> Tuple[Dict[int, np.ndarray], Dict[int, np.ndarray], Optional[float]]:
     """
     从 JSON 文件加载一致性校准参数
 
@@ -504,14 +689,14 @@ def load_consistency_params(
         sensor_config: 可选，传感器配置对象
 
     Returns:
-        (D_dict, e_dict): sensor_id -> 矩阵/向量
+        (D_dict, e_dict, amp_factor): sensor_id -> 矩阵/向量, amp_factor or None
     """
     if sensor_config is None:
         sensor_config = get_config("QMC6309")
     params_set = ConsistencyParamsSet.from_json(str(params_path))
     D_dict = {sid: np.array(p.D_i) for sid, p in params_set.params.items()}
     e_dict = {sid: np.array(p.e_i) for sid, p in params_set.params.items()}
-    return D_dict, e_dict
+    return D_dict, e_dict, params_set.amp_factor
 
 
 def main():
