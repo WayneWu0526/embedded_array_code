@@ -136,6 +136,18 @@ class SerialNodeTDM:
         except Exception as e:
             rospy.logwarn(f"Failed to load consistency params: {e}")
 
+        # Fallback: if consistency params missing, use identity D and zero e for all sensors
+        if not self.D_matrix:
+            n_sensors = self._sensor_config.manifest.n_sensors
+            for sid in range(1, n_sensors + 1):
+                self.D_matrix[sid] = np.eye(3)
+                self.e_bias[sid] = np.zeros(3)
+            self._amp_factor = 1.0
+            rospy.logwarn(f"No consistency params found, using identity D and zero e for {n_sensors} sensors (amp_factor=1.0)")
+        elif self._amp_factor is None:
+            self._amp_factor = 1.0
+            rospy.logwarn("No amp_factor found in consistency params, using 1.0")
+
     def _load_sensor_array_params(self):
         """Load d_list and R_CORR from SensorArrayConfig."""
         try:

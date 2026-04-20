@@ -73,7 +73,9 @@ def process_file(json_path, show_plot=False, run_sensitivity=False, sensor_ids=N
 
     # Process real data
     print(f"\n--- Real Data Localization ---")
-    resp = handle_localize_cycle(req)
+    resp = handle_localize_cycle(req, sensor_ids=sensor_ids)
+    if sensor_ids is not None:
+        print(f"  Using sensors: {sensor_ids}")
 
     real_success = False
     if resp.success:
@@ -108,7 +110,9 @@ def process_file(json_path, show_plot=False, run_sensitivity=False, sensor_ids=N
             mock_request_to_json(model_req, mock_path)
             print(f"Mock data saved to: {mock_path}")
 
-        model_resp = handle_localize_cycle(model_req)
+        model_resp = handle_localize_cycle(model_req, sensor_ids=sensor_ids)
+        if sensor_ids is not None:
+            print(f"  Using sensors: {sensor_ids}")
 
         if model_resp.success:
             model_success = True
@@ -217,7 +221,7 @@ def main():
             sensor_ids=sensor_ids, save_mock=args.save_mock
         )
         if show_plot and success:
-            output_path = plot_poses_comparison(req, resp, json_path=path, model_resp=model_resp)
+            _, output_path = plot_poses_comparison(req, resp, json_path=path, model_resp=model_resp)
             print(f"Plot saved to: {output_path}")
 
         if args.field_table and model_req is not None:

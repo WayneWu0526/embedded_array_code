@@ -45,6 +45,43 @@ def apply_ellipsoid_correction_to_data(b_raw: np.ndarray, o_i: np.ndarray, C_i: 
     return b_corr
 
 
+def apply_r_corr_rotation(b_corr: np.ndarray, r_corr: np.ndarray) -> np.ndarray:
+    """
+    应用 R_CORR 旋转变换
+
+    将传感器局部坐标系转换到参考坐标系
+    公式: b_rot = R_CORR @ b_corr
+
+    Args:
+        b_corr: (N, 3) 椭球校正后数据
+        r_corr: (3, 3) 旋转矩阵
+
+    Returns:
+        b_rot: (N, 3) 旋转变换后数据
+    """
+    b_corr = np.asarray(b_corr)
+    r_corr = np.asarray(r_corr)
+    return b_corr @ r_corr.T
+
+
+def build_r_corr_dict(hardware_params) -> Dict[int, np.ndarray]:
+    """
+    从 hardware params 构建 sensor_id -> R_CORR 矩阵的字典
+
+    Args:
+        hardware_params: SensorArrayHardwareParams 对象
+
+    Returns:
+        R_CORR dict: {sensor_id: np.ndarray(3, 3)}
+    """
+    r_corr_dict = {}
+    for entry in hardware_params.R_CORR:
+        mat = np.array(entry.matrix).reshape(3, 3, order='F')
+        for sid in entry.sensor_ids:
+            r_corr_dict[sid] = mat
+    return r_corr_dict
+
+
 def compute_amplification_factor(b_raw: np.ndarray, b_corr: np.ndarray) -> Dict[str, float]:
     """
     计算放大系数
@@ -248,9 +285,8 @@ class ConsistencyResult:
     """单颗传感器一致性校准结果"""
     sensor_id: int
     csv_file: str
-    D_i: List[List[float]]  # 缩放矩阵 (3×3) - 对角矩阵
+    D_i: List[List[float]]  # 缩放矩阵 (3×3)
     e_i: List[float]        # 残余偏置 (3,)
-    d_i: Dict[str, float]   # 对角元素 {'x': d_ix, 'y': d_iy, 'z': d_iz}
     fit_info: Dict
 
     def to_dict(self) -> dict:
@@ -309,7 +345,11 @@ def compute_stable_mean(data: np.ndarray, skip: int = 5) -> np.ndarray:
 
 
 # ============== 核心算法 ==============
-def fit_D_and_e(b_norm_dict: Dict[int, np.ndarray], n_sensors: int = 12) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+def fit_D_and_e(
+    b_norm_dict: Dict[int, np.ndarray],
+    n_sensors: int = 12,
+    channel_to_axis: Dict[int, str] = None,
+) -> Tuple[List[np.ndarray], List[np.ndarray]]:
     """
     拟合缩放矩阵 D_i 和残余偏置 e_i
 
@@ -323,6 +363,7 @@ def fit_D_and_e(b_norm_dict: Dict[int, np.ndarray], n_sensors: int = 12) -> Tupl
     Args:
         b_norm_dict: {condition: (n_sensors, 3)} 椭球校正后的数据
         n_sensors: 传感器数量
+        channel_to_axis: {ch: axis} 通道到驱动轴的映射（仅用于自动检测，不影响拟合）
 
     Returns:
         D_list: [D_1, ..., D_n], 每个 D_i 为 3x3 矩阵
@@ -408,6 +449,7 @@ def consistency_fit(
     sensor_config: SensorArrayConfig = None,
     auto_detect: bool = True,
     intrinsic_params: IntrinsicParamsSet = None,
+    r_corr: Dict[int, np.ndarray] = None,
     logger=None,
 ) -> Tuple[List[np.ndarray], List[np.ndarray], Dict, Optional[float]]:
     """
@@ -415,12 +457,17 @@ def consistency_fit(
 
     注意: 始终尝试自动探测通道-轴映射，因为物理连接或信号源配置可能随实验变化。
 
+    处理顺序（与 TDM 保持一致）:
+        raw_data -> ellipsoid correction -> R_CORR rotation -> consistency fit
+
     Args:
         csv_dir: CSV 文件所在目录
         data_files: 数据文件映射字典
         sensor_config: 传感器配置对象
         auto_detect: 是否自动检测通道-轴映射
         intrinsic_params: 椭球校正参数（如果提供，则对原始数据进行椭球校正）
+        r_corr: R_CORR 旋转变换字典 {sensor_id: np.ndarray(3,3)}，
+                如果提供，则在椭球校正后应用旋转变换
         logger: 可选的日志函数，用于替代 print() (e.g., rospy.loginfo)
 
     Returns:
@@ -479,14 +526,28 @@ def consistency_fit(
         sensors_raw = load_csv_data_raw(csv_path, n_sensors)  # 加载原始数据
 
         if intrinsic_params is not None:
-            # 对每个传感器应用椭球校正
-            sensors_corr = np.zeros_like(sensors_raw)
+            # Step 1: 对每个传感器应用椭球校正
+            sensors_ellipsoid = np.zeros_like(sensors_raw)
             for sid in range(1, n_sensors + 1):
                 o_i = np.array(intrinsic_params.params[sid].o_i)
                 C_i = np.array(intrinsic_params.params[sid].C_i)
-                sensors_corr[:, sid-1, :] = apply_ellipsoid_correction_to_data(
+                sensors_ellipsoid[:, sid-1, :] = apply_ellipsoid_correction_to_data(
                     sensors_raw[:, sid-1, :], o_i, C_i
                 )
+
+            # Step 2: 应用 R_CORR 旋转变换（如果提供）
+            if r_corr is not None:
+                sensors_rot = np.zeros_like(sensors_ellipsoid)
+                for sid in range(1, n_sensors + 1):
+                    if sid in r_corr:
+                        sensors_rot[:, sid-1, :] = apply_r_corr_rotation(
+                            sensors_ellipsoid[:, sid-1, :], r_corr[sid]
+                        )
+                    else:
+                        sensors_rot[:, sid-1, :] = sensors_ellipsoid[:, sid-1, :]
+                sensors_corr = sensors_rot
+            else:
+                sensors_corr = sensors_ellipsoid
 
             # 计算放大系数（使用稳定段数据）
             raw_mean = compute_stable_mean(sensors_raw)
@@ -512,7 +573,7 @@ def consistency_fit(
         logger("=" * 60)
 
     # 拟合 D_i 和 e_i
-    D_list, e_list = fit_D_and_e(b_norm_means, n_sensors)
+    D_list, e_list = fit_D_and_e(b_norm_means, n_sensors, channel_to_axis)
 
     # 仅保留算法元数据，不再存储具体的通道映射
     fit_info = {
@@ -532,6 +593,7 @@ def batch_consistency_fit(
     sensor_config: SensorArrayConfig = None,
     auto_detect: bool = True,
     intrinsic_params: IntrinsicParamsSet = None,
+    r_corr: Dict[int, np.ndarray] = None,
     logger=None,
 ) -> Tuple[List[ConsistencyResult], Optional[float]]:
     """
@@ -543,6 +605,7 @@ def batch_consistency_fit(
         sensor_config: 可选，传感器配置对象
         auto_detect: 是否自动检测通道-轴映射（默认True）
         intrinsic_params: 可选，椭球校正参数（如果提供，则对原始数据进行椭球校正）
+        r_corr: 可选，R_CORR 旋转变换字典 {sensor_id: np.ndarray(3,3)}
         logger: 可选的日志函数 (e.g., rospy.loginfo)
 
     Returns:
@@ -557,7 +620,7 @@ def batch_consistency_fit(
     D_list, e_list, fit_info, amp_factor_background = consistency_fit(
         csv_dir, data_files=None, sensor_config=sensor_config,
         auto_detect=auto_detect, intrinsic_params=intrinsic_params,
-        logger=logger
+        r_corr=r_corr, logger=logger
     )
 
     results = []
@@ -567,7 +630,6 @@ def batch_consistency_fit(
             csv_file=str(csv_dir),
             D_i=D_list[i].tolist(),
             e_i=e_list[i].tolist(),
-            d_i={'x': float(D_list[i][0,0]), 'y': float(D_list[i][1,1]), 'z': float(D_list[i][2,2])},
             fit_info=fit_info
         )
         results.append(result)
@@ -585,9 +647,14 @@ def validate_consistency(
     e_list: List[np.ndarray],
     sensor_config: SensorArrayConfig = None,
     channel_to_axis: Dict[int, str] = None,
+    intrinsic_params: IntrinsicParamsSet = None,
+    r_corr: Dict[int, np.ndarray] = None,
 ) -> Dict:
     """
     验证一致性校正效果
+
+    处理顺序（与 TDM 保持一致）:
+        raw_data -> ellipsoid correction -> R_CORR rotation -> consistency correction
 
     Args:
         csv_dir: CSV 文件所在目录
@@ -596,6 +663,8 @@ def validate_consistency(
         sensor_config: 可选，传感器配置对象
         channel_to_axis: 可选，通道-轴映射，如 {1: 'x', 2: 'y', 3: 'z'}，
                          如果为 None，则自动检测
+        intrinsic_params: 可选，椭球校正参数（如果提供，则对原始数据进行椭球校正）
+        r_corr: 可选，R_CORR 旋转变换字典 {sensor_id: np.ndarray(3,3)}
 
     Returns:
         包含校正前后标准差对比的字典
@@ -627,14 +696,43 @@ def validate_consistency(
         condition_map[f'ch{ch}_positive'] = axis_to_cond_pos[axis]
         condition_map[f'ch{ch}_negative'] = axis_to_cond_neg[axis]
 
-    # 数据已经是 ellipsoid + rotation 校正后的，直接使用
+    # 加载并处理数据（与 consistency_fit 保持一致的处理流程）
     b_norm_means = {}
     for name, filename in data_files.items():
         csv_path = Path(csv_dir) / filename
         if not csv_path.exists():
             continue
-        sensors_raw = load_csv_data(csv_path, n_sensors)
-        b_norm_means[condition_map[name]] = compute_stable_mean(sensors_raw)
+
+        sensors_raw = load_csv_data_raw(csv_path, n_sensors)  # 加载原始数据
+
+        if intrinsic_params is not None:
+            # Step 1: 椭球校正
+            sensors_ellipsoid = np.zeros_like(sensors_raw)
+            for sid in range(1, n_sensors + 1):
+                o_i = np.array(intrinsic_params.params[sid].o_i)
+                C_i = np.array(intrinsic_params.params[sid].C_i)
+                sensors_ellipsoid[:, sid-1, :] = apply_ellipsoid_correction_to_data(
+                    sensors_raw[:, sid-1, :], o_i, C_i
+                )
+
+            # Step 2: R_CORR 旋转变换
+            if r_corr is not None:
+                sensors_rot = np.zeros_like(sensors_ellipsoid)
+                for sid in range(1, n_sensors + 1):
+                    if sid in r_corr:
+                        sensors_rot[:, sid-1, :] = apply_r_corr_rotation(
+                            sensors_ellipsoid[:, sid-1, :], r_corr[sid]
+                        )
+                    else:
+                        sensors_rot[:, sid-1, :] = sensors_ellipsoid[:, sid-1, :]
+                sensors_corr = sensors_rot
+            else:
+                sensors_corr = sensors_ellipsoid
+
+            b_norm_means[condition_map[name]] = compute_stable_mean(sensors_corr)
+        else:
+            # 不进行校正，直接使用
+            b_norm_means[condition_map[name]] = compute_stable_mean(sensors_raw)
 
     conditions = [FieldCondition.ZERO] + FieldCondition.all_conditions()
     validation = {'conditions': [], 'axes': [], 'before': [], 'after': [], 'improvement_pct': []}
@@ -761,7 +859,11 @@ Examples:
 
     # Run consistency fit
     auto_detect = not args.no_auto_detect
-    results = batch_consistency_fit(csv_dir, save_path, sensor_config=get_config("QMC6309"), auto_detect=auto_detect)
+    results, amp_factor = batch_consistency_fit(csv_dir, save_path, sensor_config=get_config("QMC6309"), auto_detect=auto_detect)
+
+    # Print amp_factor if available
+    if amp_factor is not None:
+        print(f"\n  Amplification factor (background): {amp_factor:.4f}")
 
     # Print fitted parameters
     print("\n  Fitted parameters:")
