@@ -260,9 +260,14 @@ def run_localization(D_cal, sources, B_meas_cell):
 # [4] SERVICE HANDLER
 # =============================================================================
 
-def handle_localize_cycle(req):
+def handle_localize_cycle(req, sensor_ids=None):
     """
     Service handler for localize_cycle.
+
+    Args:
+        req: MockLocalizeCycleRequest or LocalizeCycleRequest
+        sensor_ids: list of sensor IDs to use for localization.
+                    None means use all sensors from req.sensor_ids.
 
     CVT mode (4 slots):
         slot 0: arm1 data - B0
@@ -282,8 +287,15 @@ def handle_localize_cycle(req):
         # [1] Extract data from request
         cycle_id = req.cycle_id
         mode = req.mode  # 'CVT' or 'CCI'
-        sensor_ids = list(req.sensor_ids)
+        all_sensor_ids = list(req.sensor_ids)
+        # Use specified sensor_ids if provided, otherwise use all
+        if sensor_ids is None:
+            sensor_ids = all_sensor_ids
         slot_data = list(req.slot_data)
+
+        def filter_sensor_data(sensor_data):
+            """Filter sensor readings to only include specified sensor IDs."""
+            return [r for r in sensor_data if r.id in sensor_ids]
 
 
         # [2] Data processing - build inputs for MaPS
@@ -291,10 +303,14 @@ def handle_localize_cycle(req):
         # Build slot lookup dict
         slot_dict = {slot.slot: slot for slot in slot_data}
 
-        # Extract B0 for CVT mode (slot 3)
+        # Build slot lookup dict
+        slot_dict = {slot.slot: slot for slot in slot_data}
+
+        # Extract B0 for CVT mode (slot 3) - with sensor filtering
         B0 = None
         if mode == 'CVT' and 3 in slot_dict:
-            B0 = process_hall_data(slot_dict[3].sensor_data)
+            filtered_B0_data = filter_sensor_data(slot_dict[3].sensor_data)
+            B0 = process_hall_data(filtered_B0_data)
 
         # Build sources and B_meas_cell (skip B0 slot for CVT)
         sources = []
@@ -319,9 +335,10 @@ def handle_localize_cycle(req):
             m_Ci = quaternion_z_axis(quat)
             sources.append({'p_Ci': p_Ci, 'm_Ci': m_Ci})
 
-            # Magnetic field measurement
-            B_meas = process_hall_data(slot.sensor_data)
-            
+            # Magnetic field measurement - with sensor filtering
+            filtered_sensor_data = filter_sensor_data(slot.sensor_data)
+            B_meas = process_hall_data(filtered_sensor_data)
+
             # Background subtraction for CVT
             if mode == 'CVT' and B0 is not None:
                 B_meas = B_meas - B0

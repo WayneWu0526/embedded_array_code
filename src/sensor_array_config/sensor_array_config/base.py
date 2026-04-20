@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Optional
 import json
 import os
 import numpy as np
@@ -64,13 +64,16 @@ class ConsistencyParams:
 @dataclass
 class ConsistencyParamsSet:
     params: Dict[int, ConsistencyParams]
+    amp_factor: Optional[float] = None  # 统一缩放因子 (方案B)
 
     @classmethod
     def from_json(cls, path: str) -> "ConsistencyParamsSet":
         with open(path) as f:
             raw = json.load(f)
         params = {}
-        # New format: {"sensors": [{"sensor_id": 1, "D_i": [...], "e_i": [...]}, ...]}
+        amp_factor = raw.get("amp_factor")  # 尝试读取 amp_factor
+
+        # New format: {"sensors": [{"sensor_id": 1, "D_i": [...], "e_i": [...]}, ...], "amp_factor": 1.5}
         if "sensors" in raw:
             for entry in raw["sensors"]:
                 params[entry["sensor_id"]] = ConsistencyParams(
@@ -80,14 +83,18 @@ class ConsistencyParamsSet:
         # Old format: {"1": {"D_i": [...], "e_i": [...]}, ...}
         else:
             for sid, entry in raw.items():
+                if sid == "amp_factor":
+                    continue
                 params[int(sid)] = ConsistencyParams(
                     D_i=entry["D_i"],
                     e_i=entry["e_i"]
                 )
-        return cls(params=params)
+        return cls(params=params, amp_factor=amp_factor)
 
     def to_json(self, path: str):
         raw = {str(k): {"D_i": v.D_i, "e_i": v.e_i} for k, v in self.params.items()}
+        if self.amp_factor is not None:
+            raw["amp_factor"] = self.amp_factor
         with open(path, "w") as f:
             json.dump(raw, f, indent=2)
 

@@ -21,6 +21,7 @@ import sys
 import csv
 import threading
 from pathlib import Path
+import numpy as np
 import rospy
 from datetime import datetime
 from std_msgs.msg import Bool, Float32
@@ -35,15 +36,22 @@ if _calib_lib not in sys.path:
 class ConsistencyCalibration:
     def __init__(self):
         # Parameters
+        self.skip_sampling = rospy.get_param('~skip_sampling', False)
         self.wait_init_time = rospy.get_param('~wait_init_time', 1.0)
         self.wait_enable_time = rospy.get_param('~wait_enable_time', 10.0)
         self.num_groups = rospy.get_param('~num_groups', 100)
         self.samples_per_group = rospy.get_param('~samples_per_group', 10)
         self.output_dir = rospy.get_param('~output_dir',
-            os.path.expanduser('~/sensor_data/consistency'))
+            os.path.expanduser('~/embedded_array_ws/src/calibration/data/consistency'))
         self._sensor_type = rospy.get_param('~sensor_type', 'QMC6309')
-        self.skip_sampling = rospy.get_param('~skip_sampling', False)
         self.skip_csv_dir = rospy.get_param('~skip_csv_dir', None)  # For skip_sampling mode
+
+        # Load ellipsoid correction parameters (intrinsic params) for post-processing
+        from sensor_array_config.base import get_config
+        self._sensor_config = get_config(self._sensor_type)
+        self._intrinsic_params = self._sensor_config.intrinsic  # Contains o_i and C_i for each sensor
+        # Load R_CORR rotation matrices from hardware params
+        self._r_corr = self._build_r_corr_dict()
 
         # State
         self.latest_sensor_data = None
@@ -75,9 +83,9 @@ class ConsistencyCalibration:
             for i in range(1, 4)
         ]
 
-        # Subscriber for STM32 (ellipsoid + rotation corrected data)
+        # Subscriber for STM32 (raw data - we apply ellipsoid correction in post-processing)
         self.sub_stm_uplink = rospy.Subscriber(
-            'stm_uplink_ellipsoid_rotated', StmUplink, self._stm_uplink_callback, queue_size=100)
+            'stm_uplink_raw', StmUplink, self._stm_uplink_callback, queue_size=100)
 
         # Register shutdown hook for cleanup
         rospy.on_shutdown(self.cleanup)
@@ -362,9 +370,19 @@ class ConsistencyCalibration:
         except Exception as e:
             rospy.logerr(f"Failed to write CSV: {e}")
 
+    def _build_r_corr_dict(self):
+        """Build sensor_id -> R_CORR numpy array dictionary."""
+        from sensor_array_config.base import SensorArrayHardwareParams
+        r_corr = {}
+        for entry in self._sensor_config.hardware.R_CORR:
+            mat = np.array(entry.matrix).reshape(3, 3, order='F')
+            for sid in entry.sensor_ids:
+                r_corr[sid] = mat
+        return r_corr
+
     def _get_default_csv_dir(self) -> Path:
         """Get default CSV directory."""
-        return Path(os.path.expanduser('~/sensor_data/consistency'))
+        return Path(os.path.expanduser('~/embedded_array_ws/src/calibration/data/consistency'))
 
     def _run_consistency_fit(self):
         """Run consistency fit calibration on existing CSV data."""
@@ -379,11 +397,20 @@ class ConsistencyCalibration:
             sensor_type_dir.mkdir(parents=True, exist_ok=True)
 
             # Run Phase 2 consistency calibration
-            results = batch_consistency_fit(
+            # Pass intrinsic_params and r_corr so the full correction chain is applied:
+            # raw -> ellipsoid -> R_CORR rotation -> consistency fit
+            results, amp_factor = batch_consistency_fit(
                 csv_dir=self.csv_dir,
                 output_path=sensor_type_dir / 'consistency_params.json',
-                auto_detect=True
+                auto_detect=True,
+                intrinsic_params=self._intrinsic_params,
+                r_corr=self._r_corr,
+                logger=rospy.loginfo
             )
+
+            # Print amp factor info
+            if amp_factor is not None:
+                rospy.loginfo("  Amplification factor (background): %.4f", amp_factor)
 
             # Print per-sensor report
             rospy.loginfo("")
@@ -398,10 +425,14 @@ class ConsistencyCalibration:
                 rospy.loginfo(f"  {r.sensor_id:<8} {D[0,0]:<10.4f} {D[1,1]:<10.4f} {D[2,2]:<10.4f} "
                               f"{e[0]:<+9.4f} {e[1]:<+9.4f} {e[2]:<+9.4f}")
 
-            # Run validation
+            # Run validation (using same processing chain as consistency_fit)
             D_list = [np.array(r.D_i) for r in results]
             e_list = [np.array(r.e_i) for r in results]
-            validation = validate_consistency(self.csv_dir, D_list, e_list)
+            validation = validate_consistency(
+                self.csv_dir, D_list, e_list,
+                intrinsic_params=self._intrinsic_params,
+                r_corr=self._r_corr
+            )
 
             rospy.loginfo("")
             rospy.loginfo("%s", "=" * 60)
@@ -452,10 +483,14 @@ class ConsistencyCalibration:
             sensor_type_dir.mkdir(parents=True, exist_ok=True)
 
             # Run Phase 2 consistency calibration
-            results = batch_consistency_fit(
+            # Pass intrinsic_params and r_corr so the full correction chain is applied:
+            # raw -> ellipsoid -> R_CORR rotation -> consistency fit
+            results, amp_factor = batch_consistency_fit(
                 csv_dir=self.output_dir,
                 output_path=sensor_type_dir / 'consistency_params.json',
-                auto_detect=True
+                auto_detect=True,
+                intrinsic_params=self._intrinsic_params,
+                r_corr=self._r_corr
             )
 
             # Print per-sensor report
@@ -471,10 +506,14 @@ class ConsistencyCalibration:
                 rospy.loginfo(f"  {r.sensor_id:<8} {D[0,0]:<10.4f} {D[1,1]:<10.4f} {D[2,2]:<10.4f} "
                               f"{e[0]:<+9.4f} {e[1]:<+9.4f} {e[2]:<+9.4f}")
 
-            # Run validation
+            # Run validation (using same processing chain as consistency_fit)
             D_list = [np.array(r.D_i) for r in results]
             e_list = [np.array(r.e_i) for r in results]
-            validation = validate_consistency(self.output_dir, D_list, e_list)
+            validation = validate_consistency(
+                self.output_dir, D_list, e_list,
+                intrinsic_params=self._intrinsic_params,
+                r_corr=self._r_corr
+            )
 
             rospy.loginfo("")
             rospy.loginfo("%s", "=" * 60)
