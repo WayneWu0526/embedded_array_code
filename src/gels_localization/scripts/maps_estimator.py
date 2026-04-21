@@ -120,34 +120,66 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
         # rho_hats[:, i] = -3 * np.linalg.solve(X_hat, b_hat_locals[:, i])
         # Eigenvalue-based method to avoid matrix inversion:
         rho_hats[:, i] = compute_rho_hat_eigen(X_hat, b_hat_locals[:, i])
+        
     # Global Pose Recovery
-    # (Eq. 14-17) Orientation Recovery via Kabsch Algorithm
-    U_P = []
-    V_P = []
+    # Standard rigid registration / absolute orientation via centered Kabsch
 
-    for i in range(M):
-        for j in range(i):
-            U_P.append(rho_hats[:, i] - rho_hats[:, j])
-            V_P.append(sources[j]['p_Ci'] - sources[i]['p_Ci'])
+    # Stack global source positions
+    p_Ck = np.column_stack([sources[i]['p_Ci'] for i in range(M)])   # shape: (3, M)
+    rho_k = rho_hats                                                   # shape: (3, M)
 
-    U_P = np.column_stack(U_P)
-    V_P = np.column_stack(V_P)
+    # Centroids
+    p_C_bar = np.mean(p_Ck, axis=1, keepdims=True)                   # shape: (3, 1)
+    rho_bar = np.mean(rho_k, axis=1, keepdims=True)                   # shape: (3, 1)
 
-    R_est = kabsch_solver(V_P, U_P)
+    # Centered correspondences
+    p_C_tilde = p_Ck - p_C_bar                                       # shape: (3, M)
+    rho_tilde = rho_k - rho_bar                                       # shape: (3, M)
 
-    # (Eq. 18) Position Averaging
-    p_ests = np.zeros((3, M))
-    for i in range(M):
-        p_ests[:, i] = sources[i]['p_Ci'] + R_est @ rho_hats[:, i]
-    p_est = np.mean(p_ests, axis=1)
+    # Since p_C_k = p - R rho_k, the centered relation is:
+    #   P_C_tilde = - R RHO_tilde
+    # Therefore solve Kabsch on (P_C_tilde, -RHO_tilde)
+    R_est = kabsch_solver(p_C_tilde, -rho_tilde)
 
+    # Position recovery
+    p_est = (p_C_bar + R_est @ rho_bar).reshape(3)
+    
     # Store details for debugging/analysis
     details = {
         'b_hat_locals': b_hat_locals,
         'X_hat_locals': X_hat_locals,
-        'rho_hats': rho_hats,
-        'p_ests': p_ests
+        'rho_bar': rho_bar,
+        'p_C_bar': p_C_bar
     }
+        
+    # # Global Pose Recovery (old version without centering)
+    # # (Eq. 14-17) Orientation Recovery via Kabsch Algorithm
+    # U_P = []
+    # V_P = []
+
+    # for i in range(M):
+    #     for j in range(i):
+    #         U_P.append(rho_hats[:, i] - rho_hats[:, j])
+    #         V_P.append(sources[j]['p_Ci'] - sources[i]['p_Ci'])
+
+    # U_P = np.column_stack(U_P)
+    # V_P = np.column_stack(V_P)
+
+    # R_est = kabsch_solver(V_P, U_P)
+
+    # # (Eq. 18) Position Averaging
+    # p_ests = np.zeros((3, M))
+    # for i in range(M):
+    #     p_ests[:, i] = sources[i]['p_Ci'] + R_est @ rho_hats[:, i]
+    # p_est = np.mean(p_ests, axis=1)
+
+    # # Store details for debugging/analysis
+    # details = {
+    #     'b_hat_locals': b_hat_locals,
+    #     'X_hat_locals': X_hat_locals,
+    #     'rho_hats': rho_hats,
+    #     'p_ests': p_ests
+    # }
 
     return R_est, p_est, details
 

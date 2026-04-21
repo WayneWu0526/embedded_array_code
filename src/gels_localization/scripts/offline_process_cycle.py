@@ -41,8 +41,6 @@ from offline_utils import (
     sensitivity_analysis_x_hat_noise,
     print_magnetic_field_table,
 )
-from offline_plot import plot_poses_comparison
-
 # Import localization functions
 from localization_service_node import handle_localize_cycle, load_configuration
 
@@ -215,14 +213,10 @@ def main():
             print(f"Using sensors: {sensor_ids}")
 
         # Single file
-        show_plot = args.plot
         success, req, resp, model_req, model_resp = process_file(
-            path, show_plot=show_plot, run_sensitivity=args.sensitivity,
+            path, show_plot=False, run_sensitivity=args.sensitivity,
             sensor_ids=sensor_ids, save_mock=args.save_mock
         )
-        if show_plot and success:
-            _, output_path = plot_poses_comparison(req, resp, json_path=path, model_resp=model_resp)
-            print(f"Plot saved to: {output_path}")
 
         if args.field_table and model_req is not None:
             print_magnetic_field_table(req, model_req=model_req)
