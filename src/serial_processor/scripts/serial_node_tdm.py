@@ -23,7 +23,7 @@ import numpy as np
 from std_msgs.msg import Header, Float32MultiArray, Empty
 from serial_processor.msg import SensorData, StmUplink, StmDownlink
 from sensor_array_config import get_config, SensorArrayConfig
-from calibration.lib.forward import CalibrationProcessor
+from calibration.forward import CalibrationProcessor
 
 
 class ManualCaptureModule:

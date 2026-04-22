@@ -26,11 +26,7 @@ import rospy
 from datetime import datetime
 from std_msgs.msg import Bool, Float32
 from serial_processor.msg import StmUplink
-
-# Add calibration/lib to Python path for consistency_fit import
-_calib_lib = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lib')
-if _calib_lib not in sys.path:
-    sys.path.insert(0, _calib_lib)
+from calibration.consistency_fit.consistency_fit import batch_consistency_fit, validate_consistency
 
 
 class ConsistencyCalibration:
@@ -388,7 +384,6 @@ class ConsistencyCalibration:
         """Run consistency fit calibration on existing CSV data."""
         rospy.loginfo("Running Phase 2 (consistency) calibration...")
         try:
-            from consistency_fit import batch_consistency_fit, validate_consistency
             import numpy as np
 
             # Output to sensor_array_config/sensor_array_config/config/{sensor_type}/

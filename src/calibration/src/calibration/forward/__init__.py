@@ -1,5 +1,5 @@
 """
-calibration.lib.forward - 正向校正模块
+calibration.forward - 正向校正模块
 
 提供 Strategy 模式的可插拔校正步骤，可独立使用或组合。
 """

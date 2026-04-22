@@ -7,7 +7,7 @@ consistency_fit.py - Phase 2: 一致性校准算法
 2. 计算 D_i (缩放矩阵) 和 e_i (残余偏置)
 
 使用方法:
-    from calibration.lib.consistency_fit import consistency_fit, batch_consistency_fit
+    from calibration.consistency_fit import consistency_fit, batch_consistency_fit
 
 参考论文公式:
     b_i^{final} = D_i * b_i^{corr} + e_i           (Phase 2 一致性校正)
@@ -806,13 +806,13 @@ def main():
         epilog="""
 Examples:
   # Process default data directory
-  python -m calibration.lib.consistency_fit /home/zhang/embedded_array_ws/src/calibration/data/consistency
+  python -m calibration.consistency_fit /home/zhang/embedded_array_ws/src/calibration/data/consistency
 
   # Process with custom output
-  python -m calibration.lib.consistency_fit ./data/consistency -o ./consistency_params.json
+  python -m calibration.consistency_fit ./data/consistency -o ./consistency_params.json
 
   # Validate existing params
-  python -m calibration.lib.consistency_fit ./data/consistency --validate
+  python -m calibration.consistency_fit ./data/consistency --validate
         """
     )
     parser.add_argument('csv_dir', nargs='?', default=None,

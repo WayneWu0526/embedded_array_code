@@ -3,7 +3,7 @@
 consistency_fit - Phase 2: 一致性校准模块
 
 使用方法:
-    from calibration.lib.consistency_fit import consistency_fit, batch_consistency_fit
+    from calibration.consistency_fit import consistency_fit, batch_consistency_fit
 
     # 执行一致性校准
     D_list, e_list, fit_info = consistency_fit(csv_dir='data/consistency/')

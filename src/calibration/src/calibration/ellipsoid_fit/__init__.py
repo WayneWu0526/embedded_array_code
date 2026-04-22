@@ -3,7 +3,7 @@
 ellipsoid_fit - QMC6309 传感器椭球校准模块
 
 使用方法:
-    from calibration.lib.ellipsoid_fit import ellipsoid_fit, batch_ellipsoid_fit
+    from calibration.ellipsoid_fit import ellipsoid_fit, batch_ellipsoid_fit
 
     # 单颗传感器校准
     result = ellipsoid_fit(b_raw, sensor_id=1)

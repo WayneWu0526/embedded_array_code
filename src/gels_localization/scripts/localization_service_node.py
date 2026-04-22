@@ -296,10 +296,23 @@ def handle_localize_cycle(req, sensor_ids=None):
         def filter_sensor_data(sensor_data):
             """Filter sensor readings to only include specified sensor IDs."""
             return [r for r in sensor_data if r.id in sensor_ids]
-
+        
+        # Extract ground truth pose for error calculation
+        p_true = np.array([
+            req.ground_truth_pose.position.x,
+            req.ground_truth_pose.position.y,
+            req.ground_truth_pose.position.z
+        ])
+        quat_true = np.array([
+            req.ground_truth_pose.orientation.w,
+            req.ground_truth_pose.orientation.x,
+            req.ground_truth_pose.orientation.y,
+            req.ground_truth_pose.orientation.z
+        ])
+        R_true = quaternion_to_rotation_matrix(quat_true)
 
         # [2] Data processing - build inputs for MaPS
-
+        
         # Build slot lookup dict
         slot_dict = {slot.slot: slot for slot in slot_data}
 
@@ -315,6 +328,7 @@ def handle_localize_cycle(req, sensor_ids=None):
         # Build sources and B_meas_cell (skip B0 slot for CVT)
         sources = []
         B_meas_cell = []
+        rho_hats_true = np.zeros((3, 3))  # For debugging - true rho in source frame
 
         for slot in slot_data:
             if slot.slot == 3:  # Skip B0 slot
@@ -344,28 +358,15 @@ def handle_localize_cycle(req, sensor_ids=None):
                 B_meas = B_meas - B0
 
             B_meas_cell.append(B_meas)
-
+            
         D_cal = build_D_cal(sensor_ids)
 
         # [3] Run localization
         R_est, p_est, quat, details = run_localization(D_cal, sources, B_meas_cell)
 
         if p_est is not None:
-            # [4] Compute errors
-            p_true = np.array([
-                req.ground_truth_pose.position.x,
-                req.ground_truth_pose.position.y,
-                req.ground_truth_pose.position.z
-            ])
-            quat_true = np.array([
-                req.ground_truth_pose.orientation.w,
-                req.ground_truth_pose.orientation.x,
-                req.ground_truth_pose.orientation.y,
-                req.ground_truth_pose.orientation.z
-            ])
-
             position_error = np.linalg.norm(p_est - p_true)
-            R_true = quaternion_to_rotation_matrix(quat_true)
+
             orientation_error = compute_rotation_error(R_est, R_true)
 
             # [5] Fill response
@@ -388,6 +389,17 @@ def handle_localize_cycle(req, sensor_ids=None):
                 print(f"[INFO] Localization succeeded: cycle={cycle_id}, "
                      f"pos=({p_est[0]:.4f}, {p_est[1]:.4f}, {p_est[2]:.4f}), "
                      f"pos_err={position_error:.6f}, ori_err={orientation_error:.6f}")
+
+            # Compare rho_hats
+            M = len(sources)
+            p_Ck = np.column_stack([sources[i]['p_Ci'] for i in range(M)])  # shape: (3, M)
+            rho_hats_true = -R_true.T @ (p_Ck - p_true.reshape(3, 1))     # shape: (3, M)
+            rho_hats_est = details['rho_hats']                              # shape: (3, M)
+
+            print(f"[DEBUG] rho_hats_true:\n{rho_hats_true}")
+            print(f"[DEBUG] rho_hats_est:\n{rho_hats_est}")
+            print(f"[DEBUG] rho_hats_diff:\n{rho_hats_true - rho_hats_est}")
+            print(f"[DEBUG] rho_hats rmse: {np.sqrt(np.mean((rho_hats_true - rho_hats_est)**2)):.6f}")
         else:
             if ROS_AVAILABLE:
                 rospy.logwarn(f"Localization failed: cycle={cycle_id}")

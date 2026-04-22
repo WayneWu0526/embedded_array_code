@@ -31,6 +31,9 @@ class CalibrationResult:
     radius_raw_std: float
     radius_corr_std: float
     improvement_ratio: float
+    cv_after: float       # 校正后变异系数: std(radius_after) / mean(radius_after)
+    center_after: List[float]  # 校正后均值: mean(A(m-o))
+    status: str           # good/acceptable/poor based on cv_after
     fit_info: Dict
 
     def to_dict(self) -> dict:
@@ -71,6 +74,22 @@ def ellipsoid_fit(b_raw: np.ndarray, sensor_id: int,
     radius_corr = np.linalg.norm(b_corr, axis=1)
     radius_raw = np.linalg.norm(b_raw - np.mean(b_raw, axis=0), axis=1)
 
+    # 计算 cv_after = std(radius_after) / mean(radius_after)
+    radius_mean = np.mean(radius_corr)
+    radius_std = np.std(radius_corr)
+    cv_after = float(radius_std / radius_mean) if radius_mean > 1e-10 else float('inf')
+
+    # 计算 center_after = mean(A(m-o))
+    center_after = np.mean(b_corr, axis=0).tolist()
+
+    # 自动判断 status
+    if cv_after < 0.02:
+        status = "good"
+    elif cv_after <= 0.05:
+        status = "acceptable"
+    else:
+        status = "poor"
+
     # 构建结果
     result = CalibrationResult(
         sensor_id=sensor_id,
@@ -80,8 +99,11 @@ def ellipsoid_fit(b_raw: np.ndarray, sensor_id: int,
         eigenvalue_ratio=float(eigenvalue_ratio),
         eigenvalues=eigenvalues_all.tolist(),
         radius_raw_std=float(np.std(radius_raw)),
-        radius_corr_std=float(np.std(radius_corr)),
-        improvement_ratio=float(np.std(radius_raw) / np.std(radius_corr)) if np.std(radius_corr) > 1e-10 else float('inf'),
+        radius_corr_std=float(radius_std),
+        improvement_ratio=float(np.std(radius_raw) / radius_std) if radius_std > 1e-10 else float('inf'),
+        cv_after=cv_after,
+        center_after=center_after,
+        status=status,
         fit_info=fit_info
     )
 
@@ -137,6 +159,10 @@ def batch_ellipsoid_fit(csv_path: Path, output_dir: Path = None,
     df = pd.read_csv(csv_path)
 
     results = []
+    # 保存原始数据(未过滤)用于后续校正输出
+    raw_data = {}
+
+    print("[INFO] Running Phase 1 (ellipsoid) calibration...")
 
     for sensor_id in sensor_config.get_sensor_ids():
         col_x = f'sensor_{sensor_id}_x'
@@ -147,11 +173,13 @@ def batch_ellipsoid_fit(csv_path: Path, output_dir: Path = None,
             print(f"[WARN] Sensor {sensor_id} columns not found in {csv_path.name}")
             continue
 
-        b_raw = df[[col_x, col_y, col_z]].values.astype(float)
+        b_raw_all = df[[col_x, col_y, col_z]].values.astype(float)
+        # 保存原始数据
+        raw_data[sensor_id] = b_raw_all
 
-        # 过滤无效数据
-        valid_mask = ~(np.isnan(b_raw).any(axis=1) | np.isinf(b_raw).any(axis=1))
-        b_raw = b_raw[valid_mask]
+        # 过滤无效数据用于拟合
+        valid_mask = ~(np.isnan(b_raw_all).any(axis=1) | np.isinf(b_raw_all).any(axis=1))
+        b_raw = b_raw_all[valid_mask]
 
         if len(b_raw) < 100:
             print(f"[WARN] Sensor {sensor_id}: insufficient valid data ({len(b_raw)} points)")
@@ -166,10 +194,100 @@ def batch_ellipsoid_fit(csv_path: Path, output_dir: Path = None,
         )
         results.append(result)
 
-        # 打印结果
-        print(f"  Sensor {sensor_id:2d}: ratio={result.eigenvalue_ratio:6.2f}, "
-              f"improvement={result.improvement_ratio:8.2f}x, "
-              f"radius: {result.radius_raw_std:.4f} → {result.radius_corr_std:.4f}")
+        # 简洁终端输出
+        print(f"  Sensor {sensor_id:2d}: improvement={result.improvement_ratio:6.2f}x, "
+              f"cv_after={result.cv_after*100:.1f}%, radius_after={result.radius_corr_std:.4f}")
+
+    # 计算 summary 统计
+    if results:
+        cv_values = [r.cv_after for r in results]
+        mean_cv_after = sum(cv_values) / len(cv_values)
+        max_cv_after = max(cv_values)
+        worst_sensor = max(results, key=lambda r: r.cv_after).sensor_id
+
+        print(f"[INFO] Phase 1 summary:")
+        print(f"  mean_cv_after={mean_cv_after:.4f}")
+        print(f"  max_cv_after={max_cv_after:.4f}")
+        print(f"  worst_sensor={worst_sensor}")
+
+        # 生成 JSON 报告
+        report = {
+            "phase": "phase1_ellipsoid",
+            "summary": {
+                "mean_cv_after": mean_cv_after,
+                "max_cv_after": max_cv_after,
+                "worst_sensor": worst_sensor
+            },
+            "sensors": [
+                {
+                    "sensor_id": r.sensor_id,
+                    "improvement": r.improvement_ratio,
+                    "cv_after": r.cv_after,
+                    "radius_after": r.radius_corr_std,
+                    "center_after": r.center_after,
+                    "status": r.status
+                }
+                for r in results
+            ]
+        }
+
+        # 保存报告到 report/ 目录
+        report_dir = Path(__file__).parent.parent.parent.parent / 'report'
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_path = report_dir / 'phase1_ellipsoid_report.json'
+        with open(report_path, 'w') as f:
+            json.dump(report, f, indent=2)
+        print(f"  report={report_path}")
+
+        # 保存校正后的数据 CSV
+        calib_data = {}
+        for result in results:
+            sid = result.sensor_id
+            o_i = np.array(result.o_i)
+            C_i = np.array(result.C_i)
+            b_raw = raw_data[sid]
+            b_corr = apply_calibration(b_raw, o_i, C_i)
+            magnitude = np.linalg.norm(b_corr, axis=1)
+            calib_data[sid] = {
+                'x': b_corr[:, 0],
+                'y': b_corr[:, 1],
+                'z': b_corr[:, 2],
+                'magnitude': magnitude
+            }
+
+        # 构建 DataFrame
+        calibrated_rows = []
+        n_samples = len(next(iter(calib_data.values()))['x'])
+        for i in range(n_samples):
+            row = []
+            for sid in sensor_config.get_sensor_ids():
+                if sid in calib_data:
+                    row.extend([
+                        f"{calib_data[sid]['x'][i]:.6f}",
+                        f"{calib_data[sid]['y'][i]:.6f}",
+                        f"{calib_data[sid]['z'][i]:.6f}",
+                        f"{calib_data[sid]['magnitude'][i]:.6f}"
+                    ])
+            calibrated_rows.append(row)
+
+        # 构建表头
+        header = []
+        for sid in sensor_config.get_sensor_ids():
+            if sid in calib_data:
+                header.extend([
+                    f'sensor_{sid}_x',
+                    f'sensor_{sid}_y',
+                    f'sensor_{sid}_z',
+                    f'sensor_{sid}_magnitude'
+                ])
+
+        import csv as csv_lib
+        calib_csv_path = csv_path.parent / 'ellipsoid_calibrated_handheld_data.csv'
+        with open(calib_csv_path, 'w', newline='') as f:
+            writer = csv_lib.writer(f)
+            writer.writerow(header)
+            writer.writerows(calibrated_rows)
+        print(f"  calibrated_data={calib_csv_path}")
 
     # 保存参数
     if output_dir is not None:

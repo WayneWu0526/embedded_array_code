@@ -54,7 +54,6 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
     N = D_cal.shape[1]
     M = len(B_meas_cell)
 
-
     # Precomputations
     # (Eq. 5) Null-space projection for local field estimation
     Q_bar = null(D_cal)
@@ -140,6 +139,11 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
     #   P_C_tilde = - R RHO_tilde
     # Therefore solve Kabsch on (P_C_tilde, -RHO_tilde)
     R_est = kabsch_solver(p_C_tilde, -rho_tilde)
+    
+    # # (Eq. 18) Position Averaging
+    p_ests = np.zeros((3, M))
+    for i in range(M):
+        p_ests[:, i] = sources[i]['p_Ci'] + R_est @ rho_hats[:, i]
 
     # Position recovery
     p_est = (p_C_bar + R_est @ rho_bar).reshape(3)
@@ -148,38 +152,11 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
     details = {
         'b_hat_locals': b_hat_locals,
         'X_hat_locals': X_hat_locals,
+        'rho_hats': rho_hats,
         'rho_bar': rho_bar,
+        'p_ests': p_ests,
         'p_C_bar': p_C_bar
     }
-        
-    # # Global Pose Recovery (old version without centering)
-    # # (Eq. 14-17) Orientation Recovery via Kabsch Algorithm
-    # U_P = []
-    # V_P = []
-
-    # for i in range(M):
-    #     for j in range(i):
-    #         U_P.append(rho_hats[:, i] - rho_hats[:, j])
-    #         V_P.append(sources[j]['p_Ci'] - sources[i]['p_Ci'])
-
-    # U_P = np.column_stack(U_P)
-    # V_P = np.column_stack(V_P)
-
-    # R_est = kabsch_solver(V_P, U_P)
-
-    # # (Eq. 18) Position Averaging
-    # p_ests = np.zeros((3, M))
-    # for i in range(M):
-    #     p_ests[:, i] = sources[i]['p_Ci'] + R_est @ rho_hats[:, i]
-    # p_est = np.mean(p_ests, axis=1)
-
-    # # Store details for debugging/analysis
-    # details = {
-    #     'b_hat_locals': b_hat_locals,
-    #     'X_hat_locals': X_hat_locals,
-    #     'rho_hats': rho_hats,
-    #     'p_ests': p_ests
-    # }
 
     return R_est, p_est, details
 

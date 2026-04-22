@@ -14,13 +14,9 @@ import csv
 import os
 from pathlib import Path
 
-# Add calibration/lib to Python path for ellipsoid_fit import
-_calib_lib = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lib')
-if _calib_lib not in sys.path:
-    sys.path.insert(0, _calib_lib)
-
 from serial_processor.msg import StmUplink
 from sensor_array_config import get_config, SensorArrayConfig
+from calibration.ellipsoid_fit.ellipsoid_fit import batch_ellipsoid_fit, save_calibration_params
 
 class HandheldCalibrationSampler:
     def __init__(self):
@@ -155,8 +151,6 @@ class HandheldCalibrationSampler:
         """Run ellipsoid fit calibration on existing CSV."""
         rospy.loginfo("Running Phase 1 (ellipsoid) calibration...")
         try:
-            from ellipsoid_fit import batch_ellipsoid_fit, save_calibration_params
-
             # Output to sensor_array_config/sensor_array_config/config/{sensor_type}/
             # Matches QMC6309Config._QMC6309_ROOT path structure
             sensor_type_dir = Path(__file__).parent.parent.parent / 'sensor_array_config' / 'sensor_array_config' / 'config' / self._sensor_type.lower()
