@@ -1,6 +1,17 @@
 <launch>
   <!-- STM32 Manual Mode Launch File -->
   <!-- 仅启动STM32下位机，手动操作模式 -->
+  <!--
+    手动采集功能：
+    - 触发: rostopic pub /manual_capture/trigger std_msgs/Empty "{}"
+    - 采集: 接收10条 stm_uplink 消息，取 x/y/z 平均
+    - 输出: ~/embedded_array_ws/src/serial_processor/data/<capture_output_filename>
+    - 格式: CSV (timestamp,sensor_1_x,sensor_1_y,sensor_1_z,...,sensor_12_z)
+    - 数据源: stm_uplink (已校正数据: 椭球+R_CORR+一致性校正)
+
+    参数:
+    - capture_output_filename: CSV输出文件名，默认 manual_capture.csv
+  -->
 
   <!-- Arguments -->
   <arg name="port" default="/dev/ttyACM"/>
