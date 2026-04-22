@@ -22,6 +22,7 @@ import numpy as np
 from std_msgs.msg import Header, Float32MultiArray
 from serial_processor.msg import SensorData, StmUplink, StmDownlink
 from sensor_array_config import get_config, SensorArrayConfig
+from calibration.lib.forward import CalibrationProcessor
 
 
 class SerialNodeTDM:
@@ -47,6 +48,9 @@ class SerialNodeTDM:
         self._adu_to_gs = self._sensor_config.manifest.adu_to_gs
         rospy.loginfo(f"Using sensor type: {self._sensor_type}")
 
+        # Calibration processor (ellipsoid + R_CORR + consistency)
+        self._calib = CalibrationProcessor(self._sensor_config)
+
         # Serial connection
         self.ser = None
         self.connect()
@@ -59,11 +63,6 @@ class SerialNodeTDM:
         self.pub_magnitude = rospy.Publisher('stm_magnitude', Float32MultiArray, queue_size=100)
         # Publisher for raw magnetic field magnitude (uncorrected)
         self.pub_magnitude_raw = rospy.Publisher('stm_magnitude_raw', Float32MultiArray, queue_size=100)
-
-        # Load ellipsoid calibration parameters
-        self._load_calibration_params()
-        # Load R_CORR rotation correction matrices
-        self._load_sensor_array_params()
 
         # Subscriber for downlink commands
         self.sub = rospy.Subscriber('stm_downlink', StmDownlink, self._downlink_callback)
@@ -96,108 +95,6 @@ class SerialNodeTDM:
             rospy.logwarn("No /dev/ttyACM* device found, fallback to /dev/ttyACM")
 
         return port
-
-    def _load_calibration_params(self):
-        """Load Phase 1 (ellipsoid) and Phase 2 (consistency) calibration params from SensorArrayConfig."""
-        # Reset params
-        self.offset = {}
-        self.correction = {}
-        self.D_matrix = {}
-        self.e_bias = {}
-        self._amp_factor = None  # 统一缩放因子 (方案B)
-
-        # Load Phase 1 (ellipsoid)
-        try:
-            intrinsic = self._sensor_config.intrinsic
-            if intrinsic and intrinsic.params:
-                for sid, params in intrinsic.params.items():
-                    self.offset[sid] = np.array(params.o_i)
-                    self.correction[sid] = np.array(params.C_i)
-                rospy.loginfo(f"Loaded ellipsoid calibration for {len(self.offset)} sensors")
-            else:
-                rospy.logwarn("No intrinsic (ellipsoid) parameters found.")
-        except Exception as e:
-            rospy.logwarn(f"Failed to load ellipsoid params: {e}")
-
-        # Load Phase 2 (consistency)
-        try:
-            consistency = self._sensor_config.consistency
-            if consistency and consistency.params:
-                for sid, params in consistency.params.items():
-                    self.D_matrix[sid] = np.array(params.D_i)
-                    self.e_bias[sid] = np.array(params.e_i)
-                self._amp_factor = consistency.amp_factor
-                if self._amp_factor is not None:
-                    rospy.loginfo(f"Loaded consistency calibration for {len(self.D_matrix)} sensors (amp_factor={self._amp_factor:.4f})")
-                else:
-                    rospy.loginfo(f"Loaded consistency calibration for {len(self.D_matrix)} sensors (no amp_factor)")
-            else:
-                rospy.logwarn("No consistency parameters found.")
-        except Exception as e:
-            rospy.logwarn(f"Failed to load consistency params: {e}")
-
-        # Fallback: if consistency params missing, use identity D and zero e for all sensors
-        if not self.D_matrix:
-            n_sensors = self._sensor_config.manifest.n_sensors
-            for sid in range(1, n_sensors + 1):
-                self.D_matrix[sid] = np.eye(3)
-                self.e_bias[sid] = np.zeros(3)
-            self._amp_factor = 1.0
-            rospy.logwarn(f"No consistency params found, using identity D and zero e for {n_sensors} sensors (amp_factor=1.0)")
-        elif self._amp_factor is None:
-            self._amp_factor = 1.0
-            rospy.logwarn("No amp_factor found in consistency params, using 1.0")
-
-    def _load_sensor_array_params(self):
-        """Load d_list and R_CORR from SensorArrayConfig."""
-        try:
-            hw = self._sensor_config.hardware
-            self._d_list = np.array(hw.d_list)
-            manifest = self._sensor_config.manifest
-            self._n_sensors = manifest.n_sensors
-            self._n_groups = manifest.n_groups
-            self._sensors_per_group = manifest.sensors_per_group
-            # Build R_CORR dict: sensor_id -> np.array(3x3)
-            # Each R_CORR entry has sensor_ids and a 9-element matrix
-            self.R_CORR = {}
-            for entry in hw.R_CORR:
-                mat = np.array(entry.matrix).reshape(3, 3, order='F')
-                for sid in entry.sensor_ids:
-                    self.R_CORR[sid] = mat
-            rospy.loginfo(f"Loaded sensor array params: {self._n_sensors} sensors, {self._n_groups} groups")
-        except Exception as e:
-            rospy.logwarn(f"Failed to load sensor array params: {e}")
-            # Fallback: will use empty configs
-            self._d_list = np.array([])
-            self._n_sensors = 0
-            self._n_groups = 0
-            self._sensors_per_group = 0
-            self.R_CORR = {}
-
-        # Build sensor -> group lookup (group index is position in R_CORR list)
-        self._sensor_to_group = {}
-        for idx, entry in enumerate(hw.R_CORR):
-            for sid in entry.sensor_ids:
-                self._sensor_to_group[sid] = idx + 1
-
-    def _apply_ellipsoid_correction(self, raw_x, raw_y, raw_z, sensor_id):
-        """Apply ellipsoid correction to raw sensor data.
-
-        Args:
-            raw_x, raw_y, raw_z: Raw sensor readings (after scale)
-            sensor_id: Sensor ID (1-12)
-
-        Returns:
-            Tuple of (corrected_x, corrected_y, corrected_z)
-        """
-        if sensor_id not in self.offset or sensor_id not in self.correction:
-            return raw_x, raw_y, raw_z
-
-        o_i = self.offset[sensor_id]
-        C_i = self.correction[sensor_id]
-        b_raw = np.array([raw_x, raw_y, raw_z])
-        b_corr = (b_raw - o_i) @ C_i.T
-        return b_corr[0], b_corr[1], b_corr[2]
 
     def connect(self):
         try:
@@ -379,19 +276,7 @@ class SerialNodeTDM:
                             # Apply full correction: ellipsoid + R_CORR + consistency
                             corrected_sensors = []
                             for s in msg.sensor_data:
-                                cx, cy, cz = self._apply_ellipsoid_correction(s.x, s.y, s.z, s.id)
-                                # Apply R_CORR rotation (transform from sensor-local to reference frame)
-                                if s.id in self.R_CORR:
-                                    b_rot = self.R_CORR[s.id] @ np.array([cx, cy, cz])
-                                    cx, cy, cz = b_rot[0], b_rot[1], b_rot[2]
-                                # Apply consistency correction: D_i * b + e_i
-                                if s.id in self.D_matrix and s.id in self.e_bias:
-                                    b_cons = self.D_matrix[s.id] @ np.array([cx, cy, cz]) + self.e_bias[s.id]
-                                    cx, cy, cz = b_cons[0], b_cons[1], b_cons[2]
-                                # Apply amp_factor scaling (方案B: 恢复到raw水平)
-                                # amp = ||b_corr|| / ||b_raw||, so divide to recover raw scale
-                                if self._amp_factor is not None and self._amp_factor != 0:
-                                    cx, cy, cz = cx / self._amp_factor, cy / self._amp_factor, cz / self._amp_factor
+                                cx, cy, cz = self._calib.apply(s.id, s.x, s.y, s.z)
                                 corrected_sensors.append(SensorData(id=s.id, x=cx, y=cy, z=cz))
 
                             # Create corrected message
