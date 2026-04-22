@@ -40,3 +40,6 @@ src/serial_processor/config/*.json
 
 # Also protect sensor_data_collection results
 src/sensor_data_collection/result/
+
+# Git worktrees
+.worktrees/
