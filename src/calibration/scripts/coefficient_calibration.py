@@ -92,7 +92,7 @@ class CoefficientCalibration:
 
         # Skip sampling mode
         if self.skip_sampling:
-            self.csv_dir = Path(self.skip_csv_dir) if self.skip_csv_dir else self._get_default_csv_dir()
+            self.csv_dir = Path(self.skip_csv_dir) if self.skip_csv_dir is not None else self._get_default_csv_dir()
             if not self.csv_dir.exists():
                 rospy.logerr(f"CSV directory not found: {self.csv_dir}")
                 sys.exit(1)
@@ -437,11 +437,6 @@ class CoefficientCalibration:
         rospy.loginfo("CSV files saved to: %s", self.output_dir)
         rospy.loginfo("Run post-processing to compute gain coefficients.")
         rospy.loginfo("=" * 60)
-
-        # Run post-processing before shutdown
-        rospy.sleep(1.0)  # Small delay to ensure cleanup is called properly
-        self._run_postprocessing()
-
         rospy.signal_shutdown("Calibration complete")
 
 
