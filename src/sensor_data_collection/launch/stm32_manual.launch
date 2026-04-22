@@ -7,6 +7,7 @@
   <arg name="baudrate" default="921600"/>
   <arg name="sensor_type" default="QMC6309"/>
   <arg name="sensor_float_endian" default="little"/>
+  <arg name="capture_output_filename" default="manual_capture.csv"/>
 
   <!-- Hall Sensor Serial Node (TDM Binary Protocol) - Manual Mode -->
   <node name="serial_node_tdm" pkg="serial_processor" type="serial_node_tdm.py" output="screen">
@@ -14,6 +15,7 @@
     <param name="baudrate" value="$(arg baudrate)"/>
     <param name="sensor_float_endian" value="$(arg sensor_float_endian)"/>
     <param name="sensor_type" value="$(arg sensor_type)"/>
+    <param name="capture_output_filename" value="$(arg capture_output_filename)"/>
   </node>
 
   <!-- Auto-send manual mode initialization command -->
