@@ -12,7 +12,7 @@ Workflow:
      - Collect num_groups groups of averaged data with channel ON (positive polarity)
      - Collect num_groups groups of averaged data with channel ON (negative polarity)
   4. Run post-processing to compute gain coefficients
-  5. Save results to CSV
+  5. Save results to JSON (per sensor, per channel)
 
 Usage:
   roslaunch calibration coefficient_calibration.launch \
@@ -295,8 +295,11 @@ class CoefficientCalibration:
         rospy.loginfo("=== POST-PROCESSING ===")
         rospy.loginfo("%s", "=" * 60)
 
-        # Collect gain estimates per channel, then average
-        sensor_gains = {sid: [] for sid in range(1, 13)}
+        # Use csv_dir from skip_sampling path, or output_dir for normal path
+        csv_dir = getattr(self, 'csv_dir', None) or Path(self.output_dir)
+
+        # {sensor_id: {"ch1": gain, "ch2": gain, "ch3": gain}}
+        sensor_gains = {sid: {"ch1": None, "ch2": None, "ch3": None} for sid in range(1, 13)}
 
         for ch in [1, 2, 3]:
             if not self.ch_enable[ch]:
@@ -305,8 +308,8 @@ class CoefficientCalibration:
             magnitude = self.ch_magnitude[ch]
 
             # Load positive and negative CSV data
-            pos_path = self.csv_dir / f"coefficient_calib_ch{ch}_positive.csv"
-            neg_path = self.csv_dir / f"coefficient_calib_ch{ch}_negative.csv"
+            pos_path = csv_dir / f"coefficient_calib_ch{ch}_positive.csv"
+            neg_path = csv_dir / f"coefficient_calib_ch{ch}_negative.csv"
 
             if not pos_path.exists():
                 rospy.logerr(f"Positive CSV not found: {pos_path}")
@@ -337,49 +340,54 @@ class CoefficientCalibration:
 
                 if diff_mag < 1e-10:
                     rospy.logwarn(f"  Sensor {sid}: diff_magnitude too small ({diff_mag:.2e}), skipping")
+                    sensor_gains[sid][f"ch{ch}"] = None
                     continue
 
                 gain = 2.0 * magnitude / diff_mag
-                sensor_gains[sid].append(gain)
+                sensor_gains[sid][f"ch{ch}"] = gain
 
                 rospy.loginfo(f"  {sid:<8} {dx:>12.6f} {dy:>12.6f} {dz:>12.6f} {diff_mag:>12.6f} {gain:>12.6f}")
 
-        # Average gains across enabled channels
+        # Print final summary
         rospy.loginfo("")
         rospy.loginfo("%s", "=" * 60)
-        rospy.loginfo("FINAL GAIN COEFFICIENTS (averaged across channels)")
+        rospy.loginfo("FINAL GAIN COEFFICIENTS (per sensor, per channel)")
         rospy.loginfo("%s", "=" * 60)
-        rospy.loginfo(f"  {'Sensor':<8} {'gain':>12} {'n_channels':>12}")
-        rospy.loginfo("  " + "-" * 35)
+        rospy.loginfo(f"  {'Sensor':<8} {'CH1':>12} {'CH2':>12} {'CH3':>12}")
+        rospy.loginfo("  " + "-" * 47)
 
-        final_gains = {}
         for sid in range(1, 13):
-            if not sensor_gains[sid]:
-                rospy.logwarn(f"  Sensor {sid}: no valid gain measurements")
-                final_gains[sid] = 1.0  # Default
-            else:
-                final_gains[sid] = np.mean(sensor_gains[sid])
-                rospy.loginfo(f"  {sid:<8} {final_gains[sid]:>12.6f} {len(sensor_gains[sid]):>12}")
+            ch1 = sensor_gains[sid]["ch1"]
+            ch2 = sensor_gains[sid]["ch2"]
+            ch3 = sensor_gains[sid]["ch3"]
+            rospy.loginfo(f"  {sid:<8} {ch1 if ch1 else 'N/A':>12} {ch2 if ch2 else 'N/A':>12} {ch3 if ch3 else 'N/A':>12}")
 
-        # Save to CSV
-        csv_path = os.path.join(self.output_dir, "coefficient_gains.csv")
-        self._save_gains_csv(csv_path, final_gains)
+        # Save to JSON
+        json_path = os.path.join(self.output_dir, "coefficient_gains.json")
+        self._save_gains_json(json_path, sensor_gains)
 
         rospy.loginfo("")
         rospy.loginfo("Coefficient calibration complete.")
-        rospy.loginfo("Gain coefficients saved to: %s", csv_path)
+        rospy.loginfo("Gain coefficients saved to: %s", json_path)
 
-    def _save_gains_csv(self, csv_path, gains):
-        """Save gain coefficients to CSV."""
+    def _save_gains_json(self, json_path, sensor_gains):
+        """Save gain coefficients to JSON file.
+
+        Format:
+        {
+          "1": {"ch1": 1.23, "ch2": null, "ch3": null},
+          "2": {"ch1": 1.45, "ch2": null, "ch3": null},
+          ...
+        }
+        """
         try:
-            with open(csv_path, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(['sensor_id', 'gain'])
-                for sid in range(1, 13):
-                    writer.writerow([sid, f"{gains[sid]:.6f}"])
-            rospy.loginfo(f"Saved {len(gains)} sensor gains to {csv_path}")
+            import json
+            # Convert None to None (json.dumps handles this)
+            with open(json_path, 'w') as f:
+                json.dump(sensor_gains, f, indent=2)
+            rospy.loginfo(f"Saved gains for 12 sensors to {json_path}")
         except Exception as e:
-            rospy.logerr(f"Failed to save gains CSV: {e}")
+            rospy.logerr(f"Failed to save gains JSON: {e}")
 
     def cleanup(self):
         """Cleanup on shutdown - run post-processing."""
