@@ -1,0 +1,97 @@
+<launch>
+    <!--
+        Coefficient Calibration Launch File
+
+        Calibrates a single gain coefficient per sensor using positive/negative
+        magnetic field excitations. Uses differential measurement to cancel background.
+
+        Hardware required:
+          - FY8300 signal generator (connected to EM coils)
+          - STM32 sensor array
+
+        Usage:
+            roslaunch calibration coefficient_calibration.launch
+
+        Example with single channel:
+            roslaunch calibration coefficient_calibration.launch \
+                ch1_enable:=true ch2_enable:=false ch3_enable:=false \
+                ch1_magnitude:=0.010 ch2_magnitude:=0.0 ch3_magnitude:=0.0
+
+        Example with multiple channels:
+            roslaunch calibration coefficient_calibration.launch \
+                ch1_enable:=true ch2_enable:=true ch3_enable:=true \
+                ch1_magnitude:=0.010 ch2_magnitude:=0.010 ch3_magnitude:=0.010
+    -->
+
+    <!-- Arguments -->
+    <arg name="sensor_type" default="QMC6309"/>
+
+    <!-- Channel enable flags (true/false) -->
+    <arg name="ch1_enable" default="false"/>
+    <arg name="ch2_enable" default="false"/>
+    <arg name="ch3_enable" default="false"/>
+
+    <!-- Theoretical magnetic field magnitude (Tesla) for each channel -->
+    <arg name="ch1_magnitude" default="0.0"/>
+    <arg name="ch2_magnitude" default="0.0"/>
+    <arg name="ch3_magnitude" default="0.0"/>
+
+    <!-- Skip sampling mode: skip data collection and run post-processing only -->
+    <arg name="skip_sampling" default="false"/>
+    <arg name="skip_csv_dir" default=""/>
+
+    <!-- ===================== -->
+    <!-- 1. Signal Generator (FY8300) -->
+    <!-- ===================== -->
+    <node name="fy8300" pkg="signal_generator" type="fy8300_node" output="screen">
+        <rosparam command="load"
+                  file="$(find calibration)/config/signal_params_calib.yaml"/>
+    </node>
+
+    <!-- ===================== -->
+    <!-- 2. Hall Sensor Serial Node (Manual Mode) -->
+    <!-- ===================== -->
+    <include file="$(find sensor_data_collection)/launch/stm32_manual.launch">
+      <arg name="sensor_type" value="$(arg sensor_type)"/>
+    </include>
+
+    <!-- ===================== -->
+    <!-- 3. Coefficient Calibration Node -->
+    <!-- ===================== -->
+    <node
+        name="coefficient_calibration"
+        pkg="calibration"
+        type="coefficient_calibration.py"
+        output="screen"
+        required="False"
+    >
+        <!-- Sensor type -->
+        <param name="sensor_type" value="$(arg sensor_type)"/>
+
+        <!-- Channel enable flags -->
+        <param name="ch1_enable" value="$(arg ch1_enable)"/>
+        <param name="ch2_enable" value="$(arg ch2_enable)"/>
+        <param name="ch3_enable" value="$(arg ch3_enable)"/>
+
+        <!-- Theoretical magnetic field magnitudes (Tesla) -->
+        <param name="ch1_magnitude" value="$(arg ch1_magnitude)"/>
+        <param name="ch2_magnitude" value="$(arg ch2_magnitude)"/>
+        <param name="ch3_magnitude" value="$(arg ch3_magnitude)"/>
+
+        <!-- Timing parameters -->
+        <param name="wait_init_time" value="10.0"/>
+        <param name="wait_enable_time" value="3.0"/>
+
+        <!-- Collection parameters -->
+        <param name="num_groups" value="50"/>
+        <param name="samples_per_group" value="10"/>
+
+        <!-- Output directory -->
+        <param name="output_dir" value="$(find calibration)/data/coefficient"/>
+
+        <!-- Skip sampling mode -->
+        <param name="skip_sampling" value="$(arg skip_sampling)"/>
+        <param name="skip_csv_dir" value="$(arg skip_csv_dir)"/>
+    </node>
+
+</launch>
