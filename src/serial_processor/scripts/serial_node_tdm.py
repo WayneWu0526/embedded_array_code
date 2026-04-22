@@ -18,11 +18,101 @@ import math
 import glob
 import os
 import json
+import csv
 import numpy as np
-from std_msgs.msg import Header, Float32MultiArray
+from std_msgs.msg import Header, Float32MultiArray, Empty
 from serial_processor.msg import SensorData, StmUplink, StmDownlink
 from sensor_array_config import get_config, SensorArrayConfig
 from calibration.lib.forward import CalibrationProcessor
+
+
+class ManualCaptureModule:
+    """Subscribes to trigger topic, collects N samples of corrected stm_uplink, averages, saves to CSV."""
+
+    SENSOR_COUNT = 12
+
+    def __init__(self, output_filename, sample_count=10):
+        """
+        Args:
+            output_filename: CSV filename (not full path). Saved to serial_processor/data/.
+            sample_count: Number of samples to average (default 10).
+        """
+        self._sample_count = sample_count
+        self._buffer = []  # list of stm_uplink messages
+        self._lock = threading.Lock()
+        self._capturing = False
+
+        # Resolve output path: ~/embedded_array_ws/src/serial_processor/data/<filename>
+        ws_root = os.path.expanduser('~/embedded_array_ws/src/serial_processor')
+        self._data_dir = os.path.join(ws_root, 'data')
+        os.makedirs(self._data_dir, exist_ok=True)
+        self._output_path = os.path.join(self._data_dir, output_filename)
+
+        # Ensure CSV header exists
+        if not os.path.exists(self._output_path):
+            header = ['timestamp'] + [
+                f'sensor_{i}_x,sensor_{i}_y,sensor_{i}_z'
+                for i in range(1, self.SENSOR_COUNT + 1)
+            ]
+            with open(self._output_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(','.join(header).split(','))  # split to flatten
+
+        # Subscribers
+        self._trigger_sub = rospy.Subscriber(
+            '/manual_capture/trigger', Empty, self._on_trigger
+        )
+        self._uplink_sub = rospy.Subscriber(
+            'stm_uplink', StmUplink, self._on_uplink
+        )
+
+        rospy.loginfo(
+            f"ManualCaptureModule: output={self._output_path}, samples={sample_count}"
+        )
+
+    def _on_trigger(self, _msg):
+        """Reset buffer and start collecting."""
+        with self._lock:
+            self._buffer = []
+            self._capturing = True
+        rospy.loginfo("ManualCapture: trigger received, collecting samples...")
+
+    def _on_uplink(self, msg):
+        """Buffer messages while capturing."""
+        with self._lock:
+            if not self._capturing:
+                return
+            self._buffer.append(msg)
+            if len(self._buffer) >= self._sample_count:
+                self._write_average()
+                self._capturing = False
+                self._buffer = []
+
+    def _write_average(self):
+        """Compute per-sensor averages and append to CSV."""
+        with self._lock:
+            if not self._buffer:
+                return
+            # buffer: list of StmUplink, each has sensor_data[0..11]
+            # Build per-sensor accumulators
+            sums = [[0.0, 0.0, 0.0] for _ in range(self.SENSOR_COUNT)]
+            for uplink_msg in self._buffer:
+                for idx, sd in enumerate(uplink_msg.sensor_data):
+                    sums[idx][0] += sd.x
+                    sums[idx][1] += sd.y
+                    sums[idx][2] += sd.z
+            avg = [
+                [s[0] / len(self._buffer), s[1] / len(self._buffer), s[2] / len(self._buffer)]
+                for s in sums
+            ]
+            # Timestamp
+            from datetime import datetime
+            ts = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
+            row = [ts] + [coord for sensor_avg in avg for coord in sensor_avg]
+            with open(self._output_path, 'a', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(row)
+            rospy.loginfo(f"ManualCapture: wrote {len(self._buffer)} samples to {self._output_path}")
 
 
 class SerialNodeTDM:
@@ -66,6 +156,10 @@ class SerialNodeTDM:
 
         # Subscriber for downlink commands
         self.sub = rospy.Subscriber('stm_downlink', StmDownlink, self._downlink_callback)
+
+        # Manual capture module
+        capture_filename = rospy.get_param('~capture_output_filename', 'manual_capture.csv')
+        self._capture = ManualCaptureModule(capture_filename, sample_count=10)
 
         rospy.loginfo(
             f"SerialNodeTDM initialized: {self.port} at {self.baudrate} baud, "
