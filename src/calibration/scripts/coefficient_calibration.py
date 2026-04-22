@@ -17,7 +17,7 @@ Workflow:
 Usage:
   roslaunch calibration coefficient_calibration.launch \
       ch1_enable:=true ch2_enable:=false ch3_enable:=false \
-      ch1_magnitude:=0.010
+      ch1_x:=25.0 ch1_y:=0.0 ch1_z:=0.0
 """
 
 import os
@@ -52,11 +52,23 @@ class CoefficientCalibration:
             3: rospy.get_param('~ch3_enable', False),
         }
 
-        # Theoretical magnetic field magnitudes (Tesla)
-        self.ch_magnitude = {
-            1: rospy.get_param('~ch1_magnitude', 0.0),
-            2: rospy.get_param('~ch2_magnitude', 0.0),
-            3: rospy.get_param('~ch3_magnitude', 0.0),
+        # Theoretical magnetic field vectors (Gs) for each channel
+        self.ch_vector = {
+            1: np.array([
+                rospy.get_param('~ch1_x', 0.0),
+                rospy.get_param('~ch1_y', 0.0),
+                rospy.get_param('~ch1_z', 0.0),
+            ]),
+            2: np.array([
+                rospy.get_param('~ch2_x', 0.0),
+                rospy.get_param('~ch2_y', 0.0),
+                rospy.get_param('~ch2_z', 0.0),
+            ]),
+            3: np.array([
+                rospy.get_param('~ch3_x', 0.0),
+                rospy.get_param('~ch3_y', 0.0),
+                rospy.get_param('~ch3_z', 0.0),
+            ]),
         }
 
         # === Report parameter settings ===
@@ -65,9 +77,11 @@ class CoefficientCalibration:
         rospy.loginfo("=" * 60)
         rospy.loginfo("Channel enable flags:")
         for ch in [1, 2, 3]:
-            rospy.loginfo("  CH%d: %s (magnitude=%.6f T)",
+            vec = self.ch_vector[ch]
+            mag = np.linalg.norm(vec)
+            rospy.loginfo("  CH%d: %s (field=[%.4f, %.4f, %.4f] Gs, |B|=%.4f Gs)",
                           ch, "ENABLED" if self.ch_enable[ch] else "DISABLED",
-                          self.ch_magnitude[ch])
+                          vec[0], vec[1], vec[2], mag)
         rospy.loginfo("Collection: %d groups x %d samples each",
                       self.num_groups, self.samples_per_group)
         rospy.loginfo("Output dir: %s", self.output_dir)
@@ -78,11 +92,15 @@ class CoefficientCalibration:
             rospy.logerr("No channels enabled! At least one channel must be enabled.")
             sys.exit(1)
 
-        # Check that enabled channels have non-zero magnitude
+        # Check that enabled channels have non-zero field magnitude
         for ch in [1, 2, 3]:
-            if self.ch_enable[ch] and self.ch_magnitude[ch] <= 0:
-                rospy.logerr("Channel %d is enabled but magnitude is %.6f (must be > 0)", ch, self.ch_magnitude[ch])
-                sys.exit(1)
+            if self.ch_enable[ch]:
+                vec = self.ch_vector[ch]
+                mag = np.linalg.norm(vec)
+                if mag <= 0:
+                    rospy.logerr("Channel %d is enabled but field vector [%.4f, %.4f, %.4f] has |B|=%.6f (must be > 0)",
+                                 ch, vec[0], vec[1], vec[2], mag)
+                    sys.exit(1)
 
         # State
         self.latest_sensor_data = None
@@ -305,7 +323,8 @@ class CoefficientCalibration:
             if not self.ch_enable[ch]:
                 continue
 
-            magnitude = self.ch_magnitude[ch]
+            vec = self.ch_vector[ch]
+            magnitude = float(np.linalg.norm(vec))  # |B| from vector (Gs)
 
             # Load positive and negative CSV data
             pos_path = csv_dir / f"coefficient_calib_ch{ch}_positive.csv"
@@ -330,7 +349,8 @@ class CoefficientCalibration:
 
             # Compute gain per sensor
             rospy.loginfo("")
-            rospy.loginfo("Channel %d (magnitude=%.6f T):", ch, magnitude)
+            rospy.loginfo("Channel %d (field=[%.4f, %.4f, %.4f] Gs, |B|=%.4f Gs):",
+                          ch, vec[0], vec[1], vec[2], magnitude)
             rospy.loginfo(f"  {'Sensor':<8} {'diff_x':>12} {'diff_y':>12} {'diff_z':>12} {'|diff|':>12} {'gain':>12}")
             rospy.loginfo("  " + "-" * 70)
 

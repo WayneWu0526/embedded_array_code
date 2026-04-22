@@ -15,12 +15,16 @@
         Example with single channel:
             roslaunch calibration coefficient_calibration.launch \
                 ch1_enable:=true ch2_enable:=false ch3_enable:=false \
-                ch1_magnitude:=0.010 ch2_magnitude:=0.0 ch3_magnitude:=0.0
+                ch1_x:=25.0 ch1_y:=0.0 ch1_z:=0.0
 
         Example with multiple channels:
             roslaunch calibration coefficient_calibration.launch \
                 ch1_enable:=true ch2_enable:=true ch3_enable:=true \
-                ch1_magnitude:=0.010 ch2_magnitude:=0.010 ch3_magnitude:=0.010
+                ch1_x:=25.0 ch1_y:=0.0 ch1_z:=0.0 \
+                ch2_x:=0.0 ch2_y:=25.0 ch2_z:=0.0 \
+                ch3_x:=0.0 ch3_y:=0.0 ch3_z:=25.0
+
+        Note: Field vector values are in Gauss (Gs).
     -->
 
     <!-- Arguments -->
@@ -31,10 +35,16 @@
     <arg name="ch2_enable" default="false"/>
     <arg name="ch3_enable" default="false"/>
 
-    <!-- Theoretical magnetic field magnitude (Tesla) for each channel -->
-    <arg name="ch1_magnitude" default="0.0"/>
-    <arg name="ch2_magnitude" default="0.0"/>
-    <arg name="ch3_magnitude" default="0.0"/>
+    <!-- Theoretical magnetic field vector (Gs) for each channel -->
+    <arg name="ch1_x" default="0.0"/>
+    <arg name="ch1_y" default="0.0"/>
+    <arg name="ch1_z" default="0.0"/>
+    <arg name="ch2_x" default="0.0"/>
+    <arg name="ch2_y" default="0.0"/>
+    <arg name="ch2_z" default="0.0"/>
+    <arg name="ch3_x" default="0.0"/>
+    <arg name="ch3_y" default="0.0"/>
+    <arg name="ch3_z" default="0.0"/>
 
     <!-- Skip sampling mode: skip data collection and run post-processing only -->
     <arg name="skip_sampling" default="false"/>
@@ -73,10 +83,16 @@
         <param name="ch2_enable" value="$(arg ch2_enable)"/>
         <param name="ch3_enable" value="$(arg ch3_enable)"/>
 
-        <!-- Theoretical magnetic field magnitudes (Tesla) -->
-        <param name="ch1_magnitude" value="$(arg ch1_magnitude)"/>
-        <param name="ch2_magnitude" value="$(arg ch2_magnitude)"/>
-        <param name="ch3_magnitude" value="$(arg ch3_magnitude)"/>
+        <!-- Theoretical magnetic field vectors (Gs) -->
+        <param name="ch1_x" value="$(arg ch1_x)"/>
+        <param name="ch1_y" value="$(arg ch1_y)"/>
+        <param name="ch1_z" value="$(arg ch1_z)"/>
+        <param name="ch2_x" value="$(arg ch2_x)"/>
+        <param name="ch2_y" value="$(arg ch2_y)"/>
+        <param name="ch2_z" value="$(arg ch2_z)"/>
+        <param name="ch3_x" value="$(arg ch3_x)"/>
+        <param name="ch3_y" value="$(arg ch3_y)"/>
+        <param name="ch3_z" value="$(arg ch3_z)"/>
 
         <!-- Timing parameters -->
         <param name="wait_init_time" value="10.0"/>
