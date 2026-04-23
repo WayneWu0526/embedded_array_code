@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """
-Coefficient Calibration Node
+Consistency Calibration Node
 
-Calibrates a single gain coefficient per sensor using differential measurement
-with positive/negative magnetic field excitations.
+Collects magnetic field data for consistency calibration using differential
+measurement with positive/negative magnetic field excitations.
 
 Workflow:
   1. Load FY8300 config (offset=+5V for positive, offset=-5V for negative)
   2. Report parameter settings (which channels enabled, magnitudes)
   3. For each enabled channel:
-     - Collect num_groups groups of averaged data with channel ON (positive polarity)
-     - Collect num_groups groups of averaged data with channel ON (negative polarity)
-  4. Run post-processing to compute gain coefficients
-  5. Save results to JSON (per sensor, per channel)
+     - Collect 200 samples with channel ON (positive polarity) and average
+     - Collect 200 samples with channel ON (negative polarity) and average
+  4. Save consolidated results to consistency_calib.csv
+
+Output format (consistency_calib.csv):
+  - 6 rows (3 channels x 2 polarities)
+  - Columns: channel, polarity, sensor_1_x, sensor_1_y, sensor_1_z, ..., sensor_12_z
 
 Usage:
   roslaunch calibration coefficient_calibration.launch \
@@ -38,10 +41,9 @@ class CoefficientCalibration:
         self.skip_sampling = rospy.get_param('~skip_sampling', False)
         self.wait_init_time = rospy.get_param('~wait_init_time', 1.0)
         self.wait_enable_time = rospy.get_param('~wait_enable_time', 10.0)
-        self.num_groups = rospy.get_param('~num_groups', 50)
-        self.samples_per_group = rospy.get_param('~samples_per_group', 10)
+        self.num_samples = rospy.get_param('~num_samples', 200)
         self.output_dir = rospy.get_param('~output_dir',
-            os.path.expanduser('~/embedded_array_ws/src/calibration/data/coefficient'))
+            os.path.expanduser('~/embedded_array_ws/src/calibration/data/'))
         self._sensor_type = rospy.get_param('~sensor_type', 'QMC6309')
         self.skip_csv_dir = rospy.get_param('~skip_csv_dir', None)
 
@@ -82,8 +84,8 @@ class CoefficientCalibration:
             rospy.loginfo("  CH%d: %s (field=[%.4f, %.4f, %.4f] Gs, |B|=%.4f Gs)",
                           ch, "ENABLED" if self.ch_enable[ch] else "DISABLED",
                           vec[0], vec[1], vec[2], mag)
-        rospy.loginfo("Collection: %d groups x %d samples each",
-                      self.num_groups, self.samples_per_group)
+        rospy.loginfo("Collection: %d samples per channel/polarity",
+                      self.num_samples)
         rospy.loginfo("Output dir: %s", self.output_dir)
         rospy.loginfo("=" * 60)
 
@@ -110,12 +112,14 @@ class CoefficientCalibration:
 
         # Skip sampling mode
         if self.skip_sampling:
-            self.csv_dir = Path(self.skip_csv_dir) if self.skip_csv_dir is not None else self._get_default_csv_dir()
-            if not self.csv_dir.exists():
-                rospy.logerr(f"CSV directory not found: {self.csv_dir}")
+            csv_path = Path(self.skip_csv_dir) / "consistency_calib.csv" if self.skip_csv_dir else Path(self.output_dir) / "consistency_calib.csv"
+            if not csv_path.exists():
+                rospy.logerr(f"CSV file not found: {csv_path}")
                 sys.exit(1)
-            rospy.loginfo(f"Skip sampling mode: processing {self.csv_dir}")
-            self._run_postprocessing()
+            rospy.loginfo(f"Skip sampling mode: displaying {csv_path}")
+            import pandas as pd
+            df = pd.read_csv(csv_path)
+            rospy.loginfo("\n%s", df.to_string())
             return
 
         # Publishers for FY8300
@@ -140,10 +144,10 @@ class CoefficientCalibration:
         rospy.sleep(1.0)
         rospy.loginfo("Ready.")
 
-        # Setup CSV header
+        # Setup CSV header for consistency_calib.csv
         os.makedirs(self.output_dir, exist_ok=True)
-        # CSV format: timestamp, sensor_1_x, sensor_1_y, sensor_1_z, ..., sensor_12_x, sensor_12_y, sensor_12_z
-        self.csv_header = ['timestamp']
+        # CSV format: channel, polarity, sensor_1_x, sensor_1_y, sensor_1_z, ..., sensor_12_x, sensor_12_y, sensor_12_z
+        self.csv_header = ['channel', 'polarity']
         for i in range(1, 13):
             self.csv_header.extend([f'sensor_{i}_x', f'sensor_{i}_y', f'sensor_{i}_z'])
 
@@ -183,6 +187,30 @@ class CoefficientCalibration:
             row.extend([f"{x:.7g}", f"{y:.7g}", f"{z:.7g}"])
         return row
 
+    def _compute_averaged_row_for_consistency(self, channel: int, polarity: str):
+        """Compute averaged values from sample buffer for consistency calibration.
+
+        Returns: [channel, polarity, sensor_1_x, sensor_1_y, sensor_1_z, ..., sensor_12_z]
+        """
+        if not self.sample_buffer:
+            return None
+
+        avg_data = {}
+        for sensor_id in range(1, 13):
+            xs = [s[sensor_id][0] for s in self.sample_buffer if sensor_id in s]
+            ys = [s[sensor_id][1] for s in self.sample_buffer if sensor_id in s]
+            zs = [s[sensor_id][2] for s in self.sample_buffer if sensor_id in s]
+            if xs:
+                avg_data[sensor_id] = (sum(xs)/len(xs), sum(ys)/len(ys), sum(zs)/len(zs))
+            else:
+                avg_data[sensor_id] = (0.0, 0.0, 0.0)
+
+        row = [channel, polarity]
+        for i in range(1, 13):
+            x, y, z = avg_data[i]
+            row.extend([x, y, z])
+        return row
+
     def _set_polarity(self, polarity: str):
         """Set FY8300 polarity by changing offset on all channels."""
         offset = 5.0 if polarity == "positive" else -5.0
@@ -200,8 +228,8 @@ class CoefficientCalibration:
         state = "ENABLED" if enabled else "DISABLED"
         rospy.loginfo(f"  FY8300 CH{channel} {state}")
 
-    def _collect_data(self, channel: int, polarity: str):
-        """Collect num_groups groups of averaged data for a channel/polarity."""
+    def _collect_single_averaged(self, channel: int, polarity: str):
+        """Collect num_samples samples for a channel/polarity and return the average."""
         rospy.loginfo("")
         rospy.loginfo("%s", "=" * 60)
         rospy.loginfo("=== Channel %d | Polarity: %s | Status: RUNNING ===", channel, polarity.upper())
@@ -212,42 +240,27 @@ class CoefficientCalibration:
         rospy.loginfo("Waiting %.1fs for FY8300 to activate...", self.wait_enable_time)
         rospy.sleep(self.wait_enable_time)
 
-        # Collect data
-        rospy.loginfo("Collecting %d groups, %d samples each...", self.num_groups, self.samples_per_group)
-        rospy.loginfo("PROGRESS: 0/%d groups (0%%)", self.num_groups)
+        # Collect samples
+        rospy.loginfo("Collecting %d samples...", self.num_samples)
         self.recording = True
-        group_results = []
-        total_samples = 0
+        self.sample_buffer = []
+        collected = 0
 
-        for group_idx in range(self.num_groups):
-            self.sample_buffer = []
-            sample_count = 0
+        while len(self.sample_buffer) < self.num_samples and not rospy.is_shutdown():
+            with self.mutex:
+                if self.latest_sensor_data is not None:
+                    sensor_dict = {}
+                    for sensor in self.latest_sensor_data.sensor_data:
+                        if 1 <= sensor.id <= 12:
+                            sensor_dict[sensor.id] = (sensor.x, sensor.y, sensor.z)
+                    self.sample_buffer.append(sensor_dict)
+                    collected += 1
+                    self.latest_sensor_data = None
+            if not rospy.is_shutdown():
+                rospy.sleep(0.001)
 
-            while len(self.sample_buffer) < self.samples_per_group and not rospy.is_shutdown():
-                with self.mutex:
-                    if self.latest_sensor_data is not None:
-                        sensor_dict = {}
-                        for sensor in self.latest_sensor_data.sensor_data:
-                            if 1 <= sensor.id <= 12:
-                                sensor_dict[sensor.id] = (sensor.x, sensor.y, sensor.z)
-                        self.sample_buffer.append(sensor_dict)
-                        sample_count += 1
-                        self.latest_sensor_data = None
-                if not rospy.is_shutdown():
-                    rospy.sleep(0.001)
-
-            if rospy.is_shutdown():
-                break
-
-            total_samples += sample_count
-            row = self._compute_averaged_row()
-            if row:
-                group_results.append(row)
-
-            if (group_idx + 1) % 5 == 0 or group_idx == self.num_groups - 1:
-                pct = (group_idx + 1) * 100.0 / self.num_groups
-                rospy.loginfo("PROGRESS: %d/%d groups (%.0f%%) | Samples: %d",
-                              group_idx + 1, self.num_groups, pct, total_samples)
+            if collected % 50 == 0:
+                rospy.loginfo("PROGRESS: %d/%d samples", collected, self.num_samples)
 
         self.recording = False
 
@@ -256,14 +269,11 @@ class CoefficientCalibration:
         rospy.loginfo("Waiting %.1fs for FY8300 to deactivate...", self.wait_enable_time)
         rospy.sleep(self.wait_enable_time)
 
-        # Save CSV
-        if group_results:
-            csv_path = os.path.join(self.output_dir, f"coefficient_calib_ch{channel}_{polarity}.csv")
-            self._write_csv(csv_path, group_results)
-            rospy.loginfo("Wrote %d groups to %s", len(group_results), csv_path)
+        # Compute averaged row
+        avg_row = self._compute_averaged_row_for_consistency(channel, polarity)
 
         rospy.loginfo("=== Channel %d | Polarity: %s | Status: COMPLETE ===", channel, polarity.upper())
-        return group_results
+        return avg_row
 
     def _write_csv(self, csv_path, rows):
         """Write rows to CSV file."""
@@ -410,9 +420,8 @@ class CoefficientCalibration:
             rospy.logerr(f"Failed to save gains JSON: {e}")
 
     def cleanup(self):
-        """Cleanup on shutdown - run post-processing."""
-        rospy.loginfo("Running post-processing...")
-        self._run_postprocessing()
+        """Cleanup on shutdown."""
+        rospy.loginfo("Shutdown complete.")
 
     def run(self):
         """Main execution flow."""
@@ -424,6 +433,8 @@ class CoefficientCalibration:
         rospy.sleep(self.wait_init_time)
 
         # Collect data for each enabled channel
+        all_results = []  # List of [channel, polarity, sensor_1_x, ...]
+
         for ch in [1, 2, 3]:
             if not self.ch_enable[ch]:
                 continue
@@ -432,7 +443,9 @@ class CoefficientCalibration:
                 break
 
             # Phase 1: Positive polarity
-            self._collect_data(ch, "positive")
+            row = self._collect_single_averaged(ch, "positive")
+            if row:
+                all_results.append(row)
 
             if rospy.is_shutdown():
                 break
@@ -444,7 +457,9 @@ class CoefficientCalibration:
             rospy.sleep(self.wait_enable_time)
 
             # Phase 2: Negative polarity
-            self._collect_data(ch, "negative")
+            row = self._collect_single_averaged(ch, "negative")
+            if row:
+                all_results.append(row)
 
             # Switch back to positive for next channel
             if ch < 3 and any(self.ch_enable[c] for c in range(ch+1, 4)):
@@ -459,11 +474,16 @@ class CoefficientCalibration:
         for ch in [1, 2, 3]:
             self._set_channel(ch, False)
 
+        # Write consolidated CSV
+        if all_results:
+            csv_path = os.path.join(self.output_dir, "consistency_calib.csv")
+            self._write_csv(csv_path, all_results)
+            rospy.loginfo("Wrote %d rows to %s", len(all_results), csv_path)
+
         rospy.loginfo("=" * 60)
         rospy.loginfo("DATA COLLECTION COMPLETE")
         rospy.loginfo("=" * 60)
-        rospy.loginfo("CSV files saved to: %s", self.output_dir)
-        rospy.loginfo("Run post-processing to compute gain coefficients.")
+        rospy.loginfo("Output: %s", os.path.join(self.output_dir, "consistency_calib.csv"))
         rospy.loginfo("=" * 60)
         rospy.signal_shutdown("Calibration complete")
 

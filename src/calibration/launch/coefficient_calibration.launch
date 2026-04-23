@@ -31,9 +31,9 @@
     <arg name="sensor_type" default="QMC6309"/>
 
     <!-- Channel enable flags (true/false) -->
-    <arg name="ch1_enable" default="false"/>
-    <arg name="ch2_enable" default="false"/>
-    <arg name="ch3_enable" default="false"/>
+    <arg name="ch1_enable" default="true"/>
+    <arg name="ch2_enable" default="true"/>
+    <arg name="ch3_enable" default="true"/>
 
     <!-- Theoretical magnetic field vector (Gs) for each channel -->
     <arg name="ch1_x" default="0.0"/>
