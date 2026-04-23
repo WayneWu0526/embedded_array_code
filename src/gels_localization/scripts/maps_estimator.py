@@ -50,68 +50,91 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
         p_est: Estimated position (3,)
         details: Dict with intermediate results for debugging
     """
-    D_cal = np.asarray(D_cal)
+    D_cal = np.asarray(D_cal, dtype=float)
     N = D_cal.shape[1]
     M = len(B_meas_cell)
 
     # Precomputations
-    # (Eq. 5) Null-space projection for local field estimation
-    Q_bar = null(D_cal)
-    g = Q_bar.T @ np.ones(N)
+    ones_N = np.ones((N, 1))
+    tol = 1e-10
 
-    # (Eq. 8) Pairwise differences for local gradient estimation
-    Np = N * (N - 1) // 2
-    D_delta = np.zeros((3, Np))
-    idx = 0
-    for i in range(N):
-        for j in range(i):
-            D_delta[:, idx] = D_cal[:, i] - D_cal[:, j]
-            idx += 1
+    # Null-space basis of D_cal
+    Q_bar = null(D_cal)  # shape: (N, N-r)
 
-    # (Eq. 9-11) Constraint matrix for symmetric traceless gradient tensor X
-    # Parametrization: X = [x1 x2 x3; x2 x4 x5; x3 x5 -(x1+x4)]
+    # Construct weight vector w for local field estimation:
+    #   D_cal @ w = 0,   1^T w = 1
+    if Q_bar.size == 0:
+        # Only valid fallback when the array is centered: D_cal @ 1 = 0
+        if np.linalg.norm(D_cal @ ones_N) < tol:
+            w = ones_N / N
+        else:
+            raise ValueError(
+                "Cannot construct local-field weight vector w: "
+                "null(D_cal) is empty and the array is not centered."
+            )
+    else:
+        g = Q_bar.T @ ones_N                      # shape: (N-r, 1)
+        g_norm_sq = float(g.T @ g)
+        if g_norm_sq < tol:
+            raise ValueError(
+                "Invalid sensor geometry: 1 has zero projection onto null(D_cal), "
+                "so the local field estimator is not identifiable."
+            )
+        w = (Q_bar @ g) / g_norm_sq              # shape: (N, 1)
+
+    # Generalized centering matrix: Pw = I - w 1^T
+    Pw = np.eye(N) - w @ ones_N.T                # shape: (N, N)
+
+    # Constraint matrix for symmetric traceless gradient tensor X
+    # Parametrization:
+    # X = [[ x1,  x2,  x3],
+    #      [ x2,  x4,  x5],
+    #      [ x3,  x5, -(x1+x4)]]
     S_mat = np.array([
-        [1,  0,  0,  0,  0],  # (1,1)
-        [0,  1,  0,  0,  0],  # (2,1)
-        [0,  0,  1,  0,  0],  # (3,1)
-        [0,  1,  0,  0,  0],  # (1,2)
-        [0,  0,  0,  1,  0],  # (2,2)
-        [0,  0,  0,  0,  1],  # (3,2)
-        [0,  0,  1,  0,  0],  # (1,3)
-        [0,  0,  0,  0,  1],  # (2,3)
-        [-1, 0,  0, -1,  0],  # (3,3)
-    ])
+        [1,  0,  0,  0,  0],   # (1,1)
+        [0,  1,  0,  0,  0],   # (2,1)
+        [0,  0,  1,  0,  0],   # (3,1)
+        [0,  1,  0,  0,  0],   # (1,2)
+        [0,  0,  0,  1,  0],   # (2,2)
+        [0,  0,  0,  0,  1],   # (3,2)
+        [0,  0,  1,  0,  0],   # (1,3)
+        [0,  0,  0,  0,  1],   # (2,3)
+        [-1, 0,  0, -1,  0],   # (3,3)
+    ], dtype=float)
 
-    C_mat = np.kron(D_delta.T, np.eye(3)) @ S_mat
+    # C = (D^T \kron I3) S
+    C_mat = np.kron(D_cal.T, np.eye(3)) @ S_mat
+    if np.linalg.matrix_rank(C_mat, tol=tol) < 5:
+        raise ValueError(
+            "Gradient tensor is not uniquely identifiable: rank(C_mat) < 5. "
+            "At least three magnetometers with non-degenerate geometry are required."
+        )
+
+    C_pinv = np.linalg.pinv(C_mat)
 
     # Local Quantity Estimation
     b_hat_locals = np.zeros((3, M))
     X_hat_locals = []
     rho_hats = np.zeros((3, M))
-    
+
     for i in range(M):
-        B_meas = B_meas_cell[i]
+        B_meas = np.asarray(B_meas_cell[i], dtype=float)  # expected shape: (3, N)
+        if B_meas.shape != (3, N):
+            raise ValueError(
+                f"B_meas_cell[{i}] has shape {B_meas.shape}, but expected (3, {N})."
+            )
 
-        # (Eq. 5) Local Field Estimator
-        if Q_bar.size == 0:
-            b_hat_locals[:, i] = (B_meas @ np.ones(N)) / N
-        else:
-            b_hat_locals[:, i] = (B_meas @ Q_bar @ g) / (np.linalg.norm(g)**2)
+        # Local field estimator: b_hat = B_meas @ w
+        b_hat = B_meas @ w                                # shape: (3, 1)
+        b_hat_locals[:, i] = b_hat.ravel()
 
-        # (Eq. 8-11) Local Gradient Tensor Estimator
-        B_delta = np.zeros((3, Np))
-        idx = 0
-        for ii in range(N):
-            for jj in range(ii):
-                B_delta[:, idx] = B_meas[:, ii] - B_meas[:, jj]
-                idx += 1
+        # Non-pairwise local gradient estimator:
+        #   h = vec(B_meas @ Pw),   x_hat = C^† h,   X_hat = mat(S x_hat)
+        B_tilde = B_meas @ Pw                             # shape: (3, N)
+        h_vec = B_tilde.reshape(-1, order='F')            # vec(.) in column-major order
+        x_hat = C_pinv @ h_vec                            # shape: (5,)
+        X_hat = (S_mat @ x_hat).reshape((3, 3), order='F')
 
-        h_vec = B_delta.flatten(order='F')  # Column-major (Fortran) order to match MATLAB
-        C_pinv = np.linalg.pinv(C_mat)
-        # x_param = np.linalg.lstsq(C_mat, h_vec, rcond=None)[0]  # Solve for X parameters
-        x_param = C_pinv @ h_vec  # More stable than lstsq for potentially rank-deficient C_mat
-        X_hat = S_mat @ x_param  # Reconstruct X from parameters
-        X_hat = X_hat.reshape((3, 3), order='F')  # Fortran order for column-major
         X_hat_locals.append(X_hat)
 
         # (Eq. 13) Local relative displacement estimation
@@ -139,11 +162,6 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
     #   P_C_tilde = - R RHO_tilde
     # Therefore solve Kabsch on (P_C_tilde, -RHO_tilde)
     R_est = kabsch_solver(p_C_tilde, -rho_tilde)
-    
-    # # (Eq. 18) Position Averaging
-    p_ests = np.zeros((3, M))
-    for i in range(M):
-        p_ests[:, i] = sources[i]['p_Ci'] + R_est @ rho_hats[:, i]
 
     # Position recovery
     p_est = (p_C_bar + R_est @ rho_bar).reshape(3)
@@ -153,8 +171,7 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
         'b_hat_locals': b_hat_locals,
         'X_hat_locals': X_hat_locals,
         'rho_hats': rho_hats,
-        'rho_bar': rho_bar,
-        'p_ests': p_ests,
+        'rho_bar': rho_bar,  
         'p_C_bar': p_C_bar
     }
 
