@@ -840,6 +840,44 @@ def parse_magnitude_txt(magnitude_path: Path) -> Dict[str, Dict[int, float]]:
     return result
 
 
+def load_manual_calibration_data(
+    data_dir: Path,
+    channel: str,
+    voltage: int,
+    n_sensors: int = 12
+) -> np.ndarray:
+    """
+    加载指定 channel 和 voltage 的手动标定数据
+
+    Args:
+        data_dir: 父目录 (e.g., .../sensor_data_collection/data)
+        channel: 'x', 'y', or 'z'
+        voltage: 1, 2, 3, 4, 5
+
+    Returns:
+        data: (N_samples, n_sensors, 3) 原始传感器数据
+    """
+    import pandas as pd
+
+    if channel not in ('x', 'y', 'z'):
+        raise ValueError(f"channel must be 'x', 'y', or 'z', got '{channel}'")
+    if voltage not in (1, 2, 3, 4, 5):
+        raise ValueError(f"voltage must be 1, 2, 3, 4, or 5, got {voltage}")
+
+    csv_path = data_dir / f"manual_{channel}" / f"manual_record_{voltage}V.csv"
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Manual calibration CSV not found: {csv_path}")
+
+    df = pd.read_csv(csv_path)
+    cols = [c for c in df.columns if c.startswith('sensor_')]
+    data = df[cols].values
+    n_samples = data.shape[0]
+    reshaped = np.zeros((n_samples, n_sensors, 3))
+    for i in range(n_sensors):
+        reshaped[:, i, :] = data[:, i*3:(i+1)*3]
+    return reshaped
+
+
 def main():
     import argparse
 
