@@ -1015,12 +1015,13 @@ def batch_consistency_check_by_magnitude(
     magnitude_path: Path,
     sensor_config: SensorArrayConfig = None,
     intrinsic_params: IntrinsicParamsSet = None,
+    verbose: bool = True,
     logger=None,
 ) -> List[Dict]:
     """
     批量执行所有 channel 和 voltage 的 magnitude-based 一致性检验
 
-    遍历所有 channel (x, y, z) 和 voltage (5, 4, 3, 2, 1) 组合，
+    遍历所有 channel 和 voltage 组合，
     对每种组合调用 consistency_check_by_magnitude。
 
     Args:
@@ -1028,6 +1029,7 @@ def batch_consistency_check_by_magnitude(
         magnitude_path: magnitude.txt 文件路径
         sensor_config: 传感器配置 (默认 QMC6309)
         intrinsic_params: 椭球校准内参
+        verbose: 是否输出详细信息 (默认 True)
         logger: 日志函数 (默认 print)
 
     Returns:
@@ -1035,23 +1037,35 @@ def batch_consistency_check_by_magnitude(
         Each result is the dict returned by consistency_check_by_magnitude.
     """
     if logger is None:
-        def logger(*args, **kwargs):
-            print(*args, **kwargs)
+        if verbose:
+            def logger(*args, **kwargs):
+                print(*args, **kwargs)
+        else:
+            def logger(*args, **kwargs):
+                pass
 
     results = []
 
-    for channel in ['x', 'y', 'z']:
-        for voltage in [5, 4, 3, 2, 1]:
-            result = consistency_check_by_magnitude(
-                data_dir=data_dir,
-                magnitude_path=magnitude_path,
-                sensor_config=sensor_config,
-                intrinsic_params=intrinsic_params,
-                channel=channel,
-                voltage=voltage,
-                logger=logger,
-            )
-            results.append(result)
+    # Get channels from magnitude.txt dynamically
+    magnitude_data = parse_magnitude_txt(magnitude_path)
+    channels = list(magnitude_data.keys())
+
+    for channel in channels:
+        for voltage in VOLTAGE_ORDER:
+            try:
+                result = consistency_check_by_magnitude(
+                    data_dir=data_dir,
+                    magnitude_path=magnitude_path,
+                    sensor_config=sensor_config,
+                    intrinsic_params=intrinsic_params,
+                    channel=channel,
+                    voltage=voltage,
+                    logger=logger,
+                )
+                results.append(result)
+            except Exception as e:
+                logger(f"[ERROR] Failed for channel={channel}, voltage={voltage}: {e}")
+                continue
 
     return results
 
