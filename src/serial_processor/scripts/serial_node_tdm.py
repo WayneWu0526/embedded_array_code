@@ -19,7 +19,8 @@ import glob
 import os
 import json
 import numpy as np
-from std_msgs.msg import Header, Float32MultiArray
+from std_msgs.msg import Header, Float32MultiArray, Bool, String
+from datetime import datetime
 from serial_processor.msg import SensorData, StmUplink, StmDownlink
 from sensor_array_config import get_config, SensorArrayConfig
 
@@ -47,6 +48,12 @@ class SerialNodeTDM:
         self._adu_to_gs = self._sensor_config.manifest.adu_to_gs
         rospy.loginfo(f"Using sensor type: {self._sensor_type}")
 
+        # Manual record parameters
+        self.output_dir = os.path.expanduser(rospy.get_param('~output_dir', '~/sensor_data'))
+        self.frames_to_average = int(rospy.get_param('~frames_to_average', 10))
+        os.makedirs(self.output_dir, exist_ok=True)
+        rospy.loginfo(f"Manual record output directory: {self.output_dir}")
+
         # Serial connection
         self.ser = None
         self.connect()
@@ -59,6 +66,10 @@ class SerialNodeTDM:
         self.pub_magnitude = rospy.Publisher('stm_magnitude', Float32MultiArray, queue_size=100)
         # Publisher for raw magnetic field magnitude (uncorrected)
         self.pub_magnitude_raw = rospy.Publisher('stm_magnitude_raw', Float32MultiArray, queue_size=100)
+        # Publisher for ellipsoid-corrected data only
+        self.pub_ellip = rospy.Publisher('stm_uplink_ellip', StmUplink, queue_size=100)
+        # Publisher for magnetic field magnitude of ellipsoid-corrected data
+        self.pub_ellip_magnitude = rospy.Publisher('stm_ellip_magnitude', Float32MultiArray, queue_size=100)
 
         # Load ellipsoid calibration parameters
         self._load_calibration_params()
@@ -377,9 +388,12 @@ class SerialNodeTDM:
                             self.pub_magnitude_raw.publish(raw_magnitudes)
 
                             # Apply full correction: ellipsoid + R_CORR + consistency
+                            ellip_sensors = []
                             corrected_sensors = []
                             for s in msg.sensor_data:
                                 cx, cy, cz = self._apply_ellipsoid_correction(s.x, s.y, s.z, s.id)
+                                # Store ellipsoid-corrected data for separate publishing
+                                ellip_sensors.append(SensorData(id=s.id, x=cx, y=cy, z=cz))
                                 # Apply R_CORR rotation (transform from sensor-local to reference frame)
                                 if s.id in self.R_CORR:
                                     b_rot = self.R_CORR[s.id] @ np.array([cx, cy, cz])
@@ -393,6 +407,21 @@ class SerialNodeTDM:
                                 if self._amp_factor is not None and self._amp_factor != 0:
                                     cx, cy, cz = cx / self._amp_factor, cy / self._amp_factor, cz / self._amp_factor
                                 corrected_sensors.append(SensorData(id=s.id, x=cx, y=cy, z=cz))
+
+                            # Publish ellipsoid-corrected data and magnitude
+                            ellip_msg = StmUplink()
+                            ellip_msg.header = msg.header
+                            ellip_msg.cycle_id = msg.cycle_id
+                            ellip_msg.slot = msg.slot
+                            ellip_msg.bitmap = msg.bitmap
+                            ellip_msg.timestamp = msg.timestamp
+                            ellip_msg.sensor_data = ellip_sensors
+                            ellip_msg.cycle_end = msg.cycle_end
+                            self.pub_ellip.publish(ellip_msg)
+
+                            ellip_magnitudes = Float32MultiArray()
+                            ellip_magnitudes.data = [math.sqrt(s.x**2 + s.y**2 + s.z**2) for s in ellip_sensors]
+                            self.pub_ellip_magnitude.publish(ellip_magnitudes)
 
                             # Create corrected message
                             corrected_msg = StmUplink()
