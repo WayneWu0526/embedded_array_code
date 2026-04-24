@@ -22,6 +22,8 @@ from dataclasses import dataclass, asdict
 
 from sensor_array_config.base import get_config, SensorArrayConfig, ConsistencyParamsSet, ConsistencyParams, IntrinsicParamsSet
 
+# ============== 常量 ==============
+VOLTAGE_ORDER = (5, 4, 3, 2, 1)
 
 # ============== 椭球校正与放大系数 ==============
 def apply_ellipsoid_correction_to_data(b_raw: np.ndarray, o_i: np.ndarray, C_i: np.ndarray) -> np.ndarray:
@@ -809,7 +811,6 @@ def parse_magnitude_txt(magnitude_path: Path) -> Dict[str, Dict[int, float]]:
         {channel: {voltage: magnitude}}
         例如: {'z': {5: 25.0, 4: 20.0, 3: 14.8, 2: 9.4, 1: 4.3}, 'y': {5: 25.0, 4: 20.0, 3: 14.8, 2: 10.0, 1: 4.8}, 'x': {5: 25.0, 4: 19.8, 3: 15.0, 2: 9.7, 1: 4.8}}
     """
-    voltage_order = [5, 4, 3, 2, 1]
     result = {}
 
     content = magnitude_path.read_text()
@@ -824,7 +825,17 @@ def parse_magnitude_txt(magnitude_path: Path) -> Dict[str, Dict[int, float]]:
         mag_match = re.search(r'magnitude,\s*([\d.,\s]+)', block)
         if mag_match:
             mag_values = [float(v.strip()) for v in mag_match.group(1).split(',')]
-            result[channel] = {voltage_order[j]: mag_values[j] for j in range(len(voltage_order))}
+            if len(mag_values) != len(VOLTAGE_ORDER):
+                raise ValueError(
+                    f"Channel '{channel}': expected {len(VOLTAGE_ORDER)} magnitude values "
+                    f"(for voltages {VOLTAGE_ORDER}), but got {len(mag_values)} values: {mag_values}"
+                )
+            result[channel] = {VOLTAGE_ORDER[j]: mag_values[j] for j in range(len(VOLTAGE_ORDER))}
+        else:
+            print(f"[WARNING] Channel '{channel}' has no magnitude line, skipping")
+
+    if not result:
+        print("[WARNING] parse_magnitude_txt: no valid channel data found, returning empty dict")
 
     return result
 
