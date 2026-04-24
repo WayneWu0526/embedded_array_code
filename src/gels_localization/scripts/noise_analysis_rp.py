@@ -248,11 +248,12 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     # Plot — academic style
     fig, axes = plt.subplots(1, 2, figsize=(17.8 / 2.54, 12.0 / 2.54))
 
-    plt.rcParams['text.usetex'] = False
-    plt.rcParams['font.family'] = 'serif'
-    plt.rcParams['font.size'] = 16
-    plt.rcParams['mathtext.fontset'] = 'cm'
-    plt.rcParams['axes.formatter.use_mathtext'] = True
+    plt.rcParams.update({
+        'text.usetex': False,
+        'font.family': 'serif',
+        'mathtext.fontset': 'cm',
+        'font.size': 16,
+    })
 
     # ---- Position error subplot ----
     ax = axes[0]
@@ -277,8 +278,8 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     ax.set_ylabel(r'$\mathrm{Position\ Error}$ $\mathrm{[mm]}$', fontsize=16)
     ax.set_xscale('log')
     ax.set_yscale('log')
-    ax.xaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter(useMathText=True))
-    ax.yaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter(useMathText=True))
+    ax.set_xticks([1e1, 1e2, 1e3, 1e4, 1e5])
+    ax.set_xticklabels([r'$10^1$', r'$10^2$', r'$10^3$', r'$10^4$', r'$10^5$'])
     ax.grid(True, alpha=0.3, which='both')
     ax.legend([r'$\mathrm{Samples}$', r'$\mathrm{Fit}$'], fontsize=11, loc='upper right')
     ax.tick_params(labelsize=14)
@@ -306,8 +307,8 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     ax.set_ylabel(r'$\mathrm{Orientation\ Error}$ $[^{\circ}]$', fontsize=16)
     ax.set_xscale('log')
     ax.set_yscale('log')
-    ax.xaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter(useMathText=True))
-    ax.yaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter(useMathText=True))
+    ax.set_xticks([1e1, 1e2, 1e3, 1e4, 1e5])
+    ax.set_xticklabels([r'$10^1$', r'$10^2$', r'$10^3$', r'$10^4$', r'$10^5$'])
     ax.grid(True, alpha=0.3, which='both')
     ax.legend([r'$\mathrm{Samples}$', r'$\mathrm{Fit}$'], fontsize=11, loc='upper right')
     ax.tick_params(labelsize=14)
