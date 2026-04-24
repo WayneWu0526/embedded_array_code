@@ -240,8 +240,8 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     all_pos_err = np.array(all_pos_err)
     all_ori_err = np.array(all_ori_err)
 
-    # Filter valid (finite SNR, non-nan, positive) points
-    valid_snr = np.isfinite(all_snr)
+    # Filter valid (finite SNR <= 1e5, non-nan, positive) points
+    valid_snr = np.isfinite(all_snr) & (all_snr <= 1e5)
     valid_pos = valid_snr & ~(np.isnan(all_pos_err) | (all_pos_err <= 0))
     valid_ori = valid_snr & ~(np.isnan(all_ori_err) | (all_ori_err <= 0))
 
@@ -277,8 +277,10 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     ax.set_ylabel(r'$\mathrm{Position\ Error}$ $\mathrm{[mm]}$', fontsize=16)
     ax.set_xscale('log')
     ax.set_yscale('log')
+    ax.xaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter(useMathText=True))
+    ax.yaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter(useMathText=True))
     ax.grid(True, alpha=0.3, which='both')
-    ax.legend(fontsize=11, loc='upper right')
+    ax.legend([r'$\mathrm{Samples}$', r'$\mathrm{Fit}$'], fontsize=11, loc='upper right')
     ax.tick_params(labelsize=14)
 
     print(f"Position fit: error = {a_pos:.4e} * SNR^({b_pos:.4f})")
@@ -304,8 +306,10 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     ax.set_ylabel(r'$\mathrm{Orientation\ Error}$ $[^{\circ}]$', fontsize=16)
     ax.set_xscale('log')
     ax.set_yscale('log')
+    ax.xaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter(useMathText=True))
+    ax.yaxis.set_major_formatter(matplotlib.ticker.ScalarFormatter(useMathText=True))
     ax.grid(True, alpha=0.3, which='both')
-    ax.legend(fontsize=11, loc='upper right')
+    ax.legend([r'$\mathrm{Samples}$', r'$\mathrm{Fit}$'], fontsize=11, loc='upper right')
     ax.tick_params(labelsize=14)
 
     print(f"Orientation fit: error = {a_ori:.4e} * SNR^({b_ori:.4f})")
