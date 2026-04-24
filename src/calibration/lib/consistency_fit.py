@@ -15,6 +15,7 @@ consistency_fit.py - Phase 2: 一致性校准算法
 
 import numpy as np
 import json
+import re
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, asdict
@@ -795,6 +796,37 @@ def load_consistency_params(
     D_dict = {sid: np.array(p.D_i) for sid, p in params_set.params.items()}
     e_dict = {sid: np.array(p.e_i) for sid, p in params_set.params.items()}
     return D_dict, e_dict, params_set.amp_factor
+
+
+def parse_magnitude_txt(magnitude_path: Path) -> Dict[str, Dict[int, float]]:
+    """
+    解析 magnitude.txt 文件，提取各 channel 各 voltage 下的参考磁场强度
+
+    Args:
+        magnitude_path: magnitude.txt 文件路径
+
+    Returns:
+        {channel: {voltage: magnitude}}
+        例如: {'z': {5: 25.0, 4: 20.0, 3: 14.8, 2: 9.4, 1: 4.3}, 'y': {5: 25.0, 4: 20.0, 3: 14.8, 2: 10.0, 1: 4.8}, 'x': {5: 25.0, 4: 19.8, 3: 15.0, 2: 9.7, 1: 4.8}}
+    """
+    voltage_order = [5, 4, 3, 2, 1]
+    result = {}
+
+    content = magnitude_path.read_text()
+    # Match channel blocks
+    channel_blocks = re.split(r'channel,\s*(\w+)', content)
+    # channel_blocks[0] is empty or before first match, [1] is channel name, [2] is content, etc.
+    for i in range(1, len(channel_blocks), 2):
+        channel = channel_blocks[i]
+        block = channel_blocks[i + 1] if i + 1 < len(channel_blocks) else ''
+
+        # Extract magnitude line
+        mag_match = re.search(r'magnitude,\s*([\d.,\s]+)', block)
+        if mag_match:
+            mag_values = [float(v.strip()) for v in mag_match.group(1).split(',')]
+            result[channel] = {voltage_order[j]: mag_values[j] for j in range(len(voltage_order))}
+
+    return result
 
 
 def main():
