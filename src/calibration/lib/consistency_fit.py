@@ -1070,6 +1070,149 @@ def batch_consistency_check_by_magnitude(
     return results
 
 
+def compute_sensor_gains(
+    data_dir: Path,
+    magnitude_path: Path,
+    sensor_config: SensorArrayConfig = None,
+    intrinsic_params: IntrinsicParamsSet = None,
+    logger=None,
+) -> Dict[int, Dict]:
+    """
+    计算每个传感器的模值增益 s_i
+
+    算法：
+    1. 加载 manual_x/y/z 目录下所有电压(1-5V)的数据
+    2. 对每个 sensor_i:
+       - 拼接所有 channel/voltage 的校准后模值 (N, 1)
+       - 拼接对应的 reference magnitude 列向量 (N, 1) = magnitude * ones(N, 1)
+       - 用最小二乘求解: ref = s_i * cal => s_i = (cal^T * ref) / (cal^T * cal)
+
+    Args:
+        data_dir: .../sensor_data_collection/data 目录
+        magnitude_path: magnitude.txt 文件路径
+        sensor_config: 传感器配置 (默认 QMC6309)
+        intrinsic_params: 椭球校准内参 (o_i, C_i)
+        logger: 日志函数 (默认 print)
+
+    Returns:
+        {sensor_id: {
+            's_i': float,           # 增益系数
+            'r_squared': float,     # R² 决定系数
+            'rmse': float,          # RMSE
+            'n_samples': int        # 样本数
+        }}
+    """
+    if logger is None:
+        def logger(*args, **kwargs):
+            print(*args, **kwargs)
+
+    if sensor_config is None:
+        sensor_config = get_config("QMC6309")
+    n_sensors = sensor_config.manifest.n_sensors
+
+    # Step 1: 解析 magnitude.txt
+    magnitude_data = parse_magnitude_txt(magnitude_path)
+
+    # Step 2: 收集所有 channel/voltage 组合
+    # 构建 (cal_magnitudes, ref_magnitudes) 数据对
+    all_data = []  # list of (cal_mag, ref_mag) tuples per sensor
+
+    channels = list(magnitude_data.keys())
+
+    for channel in channels:
+        for voltage in VOLTAGE_ORDER:
+            try:
+                raw_data = load_manual_calibration_data(data_dir, channel, voltage, n_sensors)
+            except FileNotFoundError as e:
+                logger(f"[WARN] {e}")
+                continue
+
+            ref_mag = magnitude_data[channel][voltage]
+
+            # 对每颗传感器应用椭球校正并计算模值
+            for i in range(n_sensors):
+                sensor_id = i + 1
+                b_raw = raw_data[:, i, :]  # (N, 3)
+
+                if intrinsic_params is not None:
+                    o_i = np.array(intrinsic_params.params[sensor_id].o_i)
+                    C_i = np.array(intrinsic_params.params[sensor_id].C_i)
+                    b_corr = apply_ellipsoid_correction_to_data(b_raw, o_i, C_i)
+                else:
+                    b_corr = b_raw
+
+                # 计算模值
+                cal_mags = np.linalg.norm(b_corr, axis=1, keepdims=True)  # (N, 1)
+                ref_vec = np.full((b_corr.shape[0], 1), ref_mag)  # (N, 1)
+
+                all_data.append((cal_mags, ref_vec))
+
+    # Step 3: 对每颗传感器拼接所有数据并求解最小二乘
+    results = {}
+
+    for i in range(n_sensors):
+        sensor_id = i + 1
+
+        # 拼接该传感器所有 channel/voltage 的数据
+        cal_list = [all_data[j][0][:, 0] for j in range(i, len(all_data), n_sensors)]
+        ref_list = [all_data[j][1][:, 0] for j in range(i, len(all_data), n_sensors)]
+
+        if not cal_list:
+            logger(f"[WARN] No data for sensor {sensor_id}")
+            continue
+
+        cal_all = np.concatenate(cal_list)  # (N_total,)
+        ref_all = np.concatenate(ref_list)  # (N_total,)
+
+        n_samples = len(cal_all)
+
+        # 最小二乘求解: ref = s_i * cal
+        # s_i = (cal^T * ref) / (cal^T * cal)
+        cal_col = cal_all.reshape(-1, 1)  # (N, 1)
+        ref_col = ref_all.reshape(-1, 1)  # (N, 1)
+
+        s_i = float((cal_col.T @ ref_col) / (cal_col.T @ cal_col))
+
+        # 计算拟合值和残差
+        ref_pred = s_i * cal_col
+        residuals = ref_col - ref_pred
+
+        # RMSE
+        rmse = float(np.sqrt(np.mean(residuals ** 2)))
+
+        # R² 决定系数
+        ss_res = float(np.sum(residuals ** 2))
+        ss_tot = float(np.sum((ref_col - np.mean(ref_col)) ** 2))
+        r_squared = 1.0 - (ss_res / (ss_tot + 1e-10))
+
+        results[sensor_id] = {
+            's_i': s_i,
+            'r_squared': r_squared,
+            'rmse': rmse,
+            'n_samples': n_samples,
+        }
+
+    # 打印摘要
+    logger("\n" + "=" * 50)
+    logger("Compute Sensor Gains Summary")
+    logger("=" * 50)
+    logger(f"  {'Sensor':<10} {'s_i':>12} {'R²':>12} {'RMSE':>12} {'N':>8}")
+    logger(f"  {'-' * 50}")
+    for sid in range(1, n_sensors + 1):
+        if sid in results:
+            r = results[sid]
+            logger(f"  {sid:<10} {r['s_i']:>12.6f} {r['r_squared']:>12.6f} {r['rmse']:>12.6f} {r['n_samples']:>8}")
+    logger(f"  {'-' * 50}")
+
+    s_values = [results[sid]['s_i'] for sid in range(1, n_sensors + 1) if sid in results]
+    if s_values:
+        logger(f"  {'Mean s_i:':<10} {np.mean(s_values):>12.6f}")
+        logger(f"  {'Std s_i:':<10} {np.std(s_values):>12.6f}")
+    logger("=" * 50)
+
+    return results
+
+
 def main():
     import argparse
 
