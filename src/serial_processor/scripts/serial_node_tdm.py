@@ -48,9 +48,9 @@ class ManualRecorder:
         return self._state
 
     def _write_header(self, f):
-        header = ['timestamp']
+        header = []
         for i in range(1, self.n_sensors + 1):
-            header.extend([f'sensor{i}_x', f'sensor{i}_y', f'sensor{i}_z'])
+            header.extend([f'sensor_{i}_x', f'sensor_{i}_y', f'sensor_{i}_z'])
         f.write(','.join(header) + '\n')
 
     def _average_buffer(self):
@@ -110,7 +110,7 @@ class ManualRecorder:
             if result is None:
                 return False
             timestamp, avg = result
-            row = [str(timestamp)]
+            row = []
             for (x, y, z) in avg:
                 row.extend([f'{x:.6f}', f'{y:.6f}', f'{z:.6f}'])
             self._file.write(','.join(row) + '\n')

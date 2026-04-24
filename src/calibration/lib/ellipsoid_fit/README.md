@@ -88,6 +88,11 @@ results = batch_ellipsoid_fit('path/to/another_data.csv', sensor_type='QMC6309',
 "
 ```
 
+python -c "
+from calibration.lib.ellipsoid_fit import batch_ellipsoid_fit
+results = batch_ellipsoid_fit('~/embedded_array_ws/src/sensor_data_collection/data/manual_record_bg.csv', sensor_type='QMC6309', evaluate_only=True)
+"
+
 **常用传感器型号：** `QMC6309`
 
 ---
