@@ -22,4 +22,23 @@
   <!-- Auto-send manual mode initialization command -->
   <node name="stm32_init" pkg="serial_processor" type="stm32_init.py" output="screen"/>
 
+  <!-- ================================================ -->
+  <!-- Manual Record Usage (手动记录使用方法)           -->
+  <!-- ================================================ -->
+  <!--
+  主题触发方式:
+    $ rostopic pub -1 /serial_node_tdm/record_trigger std_msgs/Bool "data: true"   # 开始/继续记录
+    $ rostopic pub -1 /serial_node_tdm/record_trigger std_msgs/Bool "data: false"  # 暂停记录
+
+  查看状态:
+    $ rostopic echo /serial_node_tdm/stm_manual_record/status
+
+  输出文件:
+    ~/sensor_data_collection/data/manual_record_<timestamp>.csv
+    - 37列: timestamp, sensor1_x, sensor1_y, sensor1_z, ..., sensor12_x, sensor12_y, sensor12_z
+    - 每10帧平均为1行 (frames_to_average=10)
+    - 单位: Gs, 6位小数
+    - True后新建文件, False暂停(文件保持open), 再次True续写同一文件
+  -->
+
 </launch>
