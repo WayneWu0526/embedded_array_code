@@ -34,18 +34,26 @@ b_corr = C_i × (b_raw - o_i)  ≈  球形
 ```python
 from calibration.lib.ellipsoid_fit import ellipsoid_fit, batch_ellipsoid_fit
 
-# 单颗传感器校准
+# 单颗传感器校准（拟合 + 评价）
 result = ellipsoid_fit(b_raw, sensor_id=1)
 # result.o_i: offset 向量 (3,)
 # result.C_i: 校正矩阵 (3×3)
-# result.improvement_ratio: 改善倍数
+# result.cv_after: 变异系数
+# result.status: good/acceptable/poor
 
 # 批量校准
 results = batch_ellipsoid_fit('data.csv', output_dir='report/')
+
+# 单颗传感器评估（使用预计算参数，无需拟合）
+result = ellipsoid_fit(b_raw, sensor_id=1, o_i=o_i, C_i=C_i)
+
+# 批量评估（自动从配置加载参数）
+results = batch_ellipsoid_fit('data.csv', sensor_type='QMC6309', evaluate_only=True)
 ```
 
 ### 2. 命令行
 
+**批量校准（拟合 + 评价）：**
 ```bash
 python -c "
 from calibration.lib.ellipsoid_fit import batch_ellipsoid_fit
@@ -53,26 +61,64 @@ results = batch_ellipsoid_fit('data/raw_data.csv', output_dir='report/')
 "
 ```
 
+**批量评估（使用预计算参数，无需拟合）：**
+```bash
+python -c "
+from calibration.lib.ellipsoid_fit import batch_ellipsoid_fit
+results = batch_ellipsoid_fit(
+    csv_path='data/your_data.csv',
+    sensor_type='QMC6309',
+    evaluate_only=True
+)
+"
+```
+
+**不同传感器型号示例：**
+```bash
+# QMC6308 传感器评估
+python -c "
+from calibration.lib.ellipsoid_fit import batch_ellipsoid_fit
+results = batch_ellipsoid_fit('data.csv', sensor_type='QMC6308', evaluate_only=True)
+"
+
+# 不同 CSV 文件评估
+python -c "
+from calibration.lib.ellipsoid_fit import batch_ellipsoid_fit
+results = batch_ellipsoid_fit('path/to/another_data.csv', sensor_type='QMC6309', evaluate_only=True)
+"
+```
+
+**常用传感器型号：** `QMC6309`
+
 ---
 
 ## 校准结果
 
+### 评价指标说明
+
+| 指标 | 说明 |
+|------|------|
+| `cv_after` | 校正后变异系数 = std(radius) / mean(radius)，衡量球形均匀度 |
+| `status` | 评级：good (<2%), acceptable (2-5%), poor (>5%) |
+| `center_after` | 校正后均值向量，检测残余偏置 |
+| `improvement_ratio` | 校正前后 radius std 的比值 |
+
 ### handheld_calib_20260415_175629.csv (500点)
 
-| 传感器 | eigenvalue_ratio | 改善倍数 | radius: before → after |
-|--------|-----------------|----------|------------------------|
-| 1 | 1.38 | 14.0x | 0.0965 → 0.0069 |
-| 2 | 1.40 | 21.5x | 0.0941 → 0.0044 |
-| 3 | 1.37 | 14.7x | 0.0936 → 0.0064 |
-| 4 | 1.39 | 17.9x | 0.0931 → 0.0052 |
-| 5 | 1.39 | 17.5x | 0.0952 → 0.0054 |
-| 6 | 1.39 | 18.8x | 0.0942 → 0.0050 |
-| 7 | 1.44 | 17.0x | 0.0924 → 0.0054 |
-| 8 | 1.42 | 15.0x | 0.0935 → 0.0062 |
-| 9 | 1.44 | 15.6x | 0.0948 → 0.0061 |
-| 10 | 1.43 | 17.2x | 0.0930 → 0.0054 |
-| 11 | 1.43 | 16.1x | 0.0934 → 0.0058 |
-| 12 | 1.41 | 16.0x | 0.0931 → 0.0058 |
+| 传感器 | eigenvalue_ratio | 改善倍数 | cv_after | radius: before → after | status |
+|--------|-----------------|----------|----------|------------------------|--------|
+| 1 | 1.38 | 14.0x | — | 0.0965 → 0.0069 | — |
+| 2 | 1.40 | 21.5x | — | 0.0941 → 0.0044 | — |
+| 3 | 1.37 | 14.7x | — | 0.0936 → 0.0064 | — |
+| 4 | 1.39 | 17.9x | — | 0.0931 → 0.0052 | — |
+| 5 | 1.39 | 17.5x | — | 0.0952 → 0.0054 | — |
+| 6 | 1.39 | 18.8x | — | 0.0942 → 0.0050 | — |
+| 7 | 1.44 | 17.0x | — | 0.0924 → 0.0054 | — |
+| 8 | 1.42 | 15.0x | — | 0.0935 → 0.0062 | — |
+| 9 | 1.44 | 15.6x | — | 0.0948 → 0.0061 | — |
+| 10 | 1.43 | 17.2x | — | 0.0930 → 0.0054 | — |
+| 11 | 1.43 | 16.1x | — | 0.0934 → 0.0058 | — |
+| 12 | 1.41 | 16.0x | — | 0.0931 → 0.0058 | — |
 
 ---
 
@@ -144,21 +190,31 @@ results = batch_ellipsoid_fit('data/raw_data.csv', output_dir='report/')
 
 ## API
 
-### ellipsoid_fit(b_raw, sensor_id, csv_file='', use_iterative=False)
+### ellipsoid_fit(b_raw, sensor_id, ...)
 
-单颗传感器椭球拟合。
+单颗传感器椭球拟合或评估。
 
 **参数:**
 - `b_raw`: N×3 原始磁场数据
 - `sensor_id`: 传感器编号 (1-12)
 - `csv_file`: 原始数据文件名
-- `use_iterative`: 是否使用迭代方法（更鲁棒但更慢）
+- `use_iterative`: 是否使用迭代方法（仅校准模式有效）
+- `o_i`, `C_i`: 预计算参数（提供则进入评估模式）
 
 **返回:** `CalibrationResult`
+- `o_i`, `C_i`: 校准参数
+- `cv_after`: 变异系数
+- `status`: good/acceptable/poor
 
-### batch_ellipsoid_fit(csv_path, output_dir=None)
+### batch_ellipsoid_fit(csv_path, ...)
 
-批量校准 CSV 中所有 12 颗传感器。
+批量校准/评估 CSV 中所有传感器。
+
+**参数:**
+- `csv_path`: CSV 文件路径
+- `output_dir`: 输出目录（仅校准模式保存参数用）
+- `sensor_type`: 传感器型号（如 "QMC6309"）
+- `evaluate_only`: True 则使用预计算参数，仅评估
 
 ### apply_calibration(b_raw, o_i, C_i)
 
