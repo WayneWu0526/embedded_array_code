@@ -619,7 +619,77 @@ class ConsistencyCalibration:
         rospy.signal_shutdown("Calibration complete")
 
 
-if __name__ == '__main__':
+def run_magnitude_check(args):
+    """Run magnitude-based consistency check"""
+    from consistency_fit import consistency_check_by_magnitude
+    from sensor_array_config.base import get_config
+
+    data_dir = Path(__file__).parent.parent.parent / 'sensor_data_collection' / 'data'
+    magnitude_path = data_dir / 'magnitude.txt'
+
+    sensor_config = get_config(args.sensor_type)
+    intrinsic_params = sensor_config.intrinsic
+
+    if args.batch:
+        rospy.loginfo("Batch mode not yet implemented, running single check.")
+        result = consistency_check_by_magnitude(
+            data_dir=data_dir,
+            magnitude_path=magnitude_path,
+            sensor_config=sensor_config,
+            intrinsic_params=intrinsic_params,
+            channel=args.channel,
+            voltage=args.voltage,
+            logger=rospy.loginfo
+        )
+        rospy.loginfo(f"Batch check complete: 1 combination checked.")
+    else:
+        result = consistency_check_by_magnitude(
+            data_dir=data_dir,
+            magnitude_path=magnitude_path,
+            sensor_config=sensor_config,
+            intrinsic_params=intrinsic_params,
+            channel=args.channel,
+            voltage=args.voltage,
+            logger=rospy.loginfo
+        )
+        rospy.loginfo("Magnitude check complete.")
+
+
+def main():
+    """Main entry point with argument parsing."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Consistency Calibration Node')
+    parser.add_argument('--magnitude-check', action='store_true',
+                        help='Enable magnitude check mode')
+    parser.add_argument('--channel', type=str, default='x', choices=['x', 'y', 'z'],
+                        help='Channel to check (default: x)')
+    parser.add_argument('--voltage', type=int, default=5, choices=[1, 2, 3, 4, 5],
+                        help='Voltage to check (default: 5)')
+    parser.add_argument('--batch', action='store_true',
+                        help='Run all channel/voltage combinations')
+    parser.add_argument('--sensor-type', type=str, default='QMC6309',
+                        help='Sensor type (default: QMC6309)')
+    parser.add_argument('--skip-sampling', action='store_true', default=False,
+                        help='Skip sampling and run consistency fit directly')
+    parser.add_argument('--skip-csv-dir', type=str, default=None,
+                        help='CSV directory for skip-sampling mode')
+
+    args = parser.parse_args(rospy.myargv()[1:])
+
+    if args.magnitude_check:
+        rospy.init_node('consistency_magnitude_check', anonymous=True)
+        try:
+            run_magnitude_check(args)
+        except rospy.ROSInterruptException:
+            rospy.loginfo("Interrupted.")
+        except Exception as e:
+            rospy.logerr(f"Error: {e}")
+            import traceback
+            traceback.print_exc()
+        return
+
+    # Default behavior: run consistency calibration
     rospy.init_node('consistency_calibration', anonymous=True)
     try:
         calib = ConsistencyCalibration()
@@ -631,3 +701,7 @@ if __name__ == '__main__':
         rospy.logerr(f"Error: {e}")
         import traceback
         traceback.print_exc()
+
+
+if __name__ == '__main__':
+    main()
