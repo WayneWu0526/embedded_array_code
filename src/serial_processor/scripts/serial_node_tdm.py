@@ -25,6 +25,104 @@ from serial_processor.msg import SensorData, StmUplink, StmDownlink
 from sensor_array_config import get_config, SensorArrayConfig
 
 
+class ManualRecorder:
+    """Records raw stm_uplink data to CSV on trigger."""
+
+    STATE_IDLE = 'idle'
+    STATE_RECORDING = 'recording'
+    STATE_PAUSED = 'paused'
+
+    def __init__(self, output_dir, frames_to_average, n_sensors=12):
+        self.output_dir = output_dir
+        self.frames_to_average = frames_to_average
+        self.n_sensors = n_sensors
+        self._state = self.STATE_IDLE
+        self._file = None
+        self._buffer = []  # list of StmUplink messages
+        self._csv_path = None
+
+    @property
+    def state(self):
+        return self._state
+
+    def _write_header(self, f):
+        header = ['timestamp']
+        for i in range(1, self.n_sensors + 1):
+            header.extend([f'sensor{i}_x', f'sensor{i}_y', f'sensor{i}_z'])
+        f.write(','.join(header) + '\n')
+
+    def _average_buffer(self):
+        """Compute per-sensor average from buffered StmUplink messages."""
+        if not self._buffer:
+            return None
+        first = self._buffer[0]
+        n = len(self._buffer)
+        sum_x = [0.0] * self.n_sensors
+        sum_y = [0.0] * self.n_sensors
+        sum_z = [0.0] * self.n_sensors
+        for msg in self._buffer:
+            for idx, s in enumerate(msg.sensor_data):
+                sum_x[idx] += s.x
+                sum_y[idx] += s.y
+                sum_z[idx] += s.z
+        avg = [0.0] * self.n_sensors
+        for i in range(self.n_sensors):
+            avg[i] = (sum_x[i] / n, sum_y[i] / n, sum_z[i] / n)
+        timestamp = self._buffer[-1].timestamp
+        self._buffer.clear()
+        return timestamp, avg
+
+    def trigger(self, enable):
+        """Handle trigger message."""
+        if enable:
+            self._start_recording()
+        else:
+            self._pause_recording()
+
+    def _start_recording(self):
+        if self._state == self.STATE_IDLE:
+            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+            self._csv_path = os.path.join(self.output_dir, f'manual_record_{ts}.csv')
+            self._file = open(self._csv_path, 'w')
+            self._write_header(self._file)
+            rospy.loginfo(f"[ManualRecorder] Recording started: {self._csv_path}")
+        self._state = self.STATE_RECORDING
+
+    def _pause_recording(self):
+        if self._state == self.STATE_RECORDING:
+            self._buffer.clear()
+            self._state = self.STATE_PAUSED
+            rospy.loginfo("[ManualRecorder] Recording paused")
+
+    def on_uplink_raw(self, msg):
+        """Process incoming stm_uplink_raw message. Returns True if row was written."""
+        if self._state != self.STATE_RECORDING:
+            return False
+        self._buffer.append(msg)
+        if len(self._buffer) >= self.frames_to_average:
+            result = self._average_buffer()
+            if result is None:
+                return False
+            timestamp, avg = result
+            row = [str(timestamp)]
+            for (x, y, z) in avg:
+                row.extend([f'{x:.6f}', f'{y:.6f}', f'{z:.6f}'])
+            self._file.write(','.join(row) + '\n')
+            return True
+        return False
+
+    def flush_and_close(self):
+        """Flush and close file. Called on shutdown."""
+        if self._file:
+            self._file.flush()
+            os.fsync(self._file.fileno())
+            self._file.close()
+            self._file = None
+        self._buffer.clear()
+        self._state = self.STATE_IDLE
+        rospy.loginfo("[ManualRecorder] File closed")
+
+
 class SerialNodeTDM:
     # Protocol constants
     HEADER = 0xAA55
