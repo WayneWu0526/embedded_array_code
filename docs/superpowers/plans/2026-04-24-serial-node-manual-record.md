@@ -36,7 +36,7 @@ After line 48 (after `rospy.loginfo` for sensor type), add:
 
 ```python
 # Manual record parameters
-self.output_dir = os.path.expanduser(rospy.get_param('~output_dir', '~/sensor_data_collection/data'))
+self.output_dir = os.path.expanduser(rospy.get_param('~output_dir', '~/embedded_array_ws/src/sensor_data_collection/data'))
 self.frames_to_average = int(rospy.get_param('~frames_to_average', 10))
 os.makedirs(self.output_dir, exist_ok=True)
 rospy.loginfo(f"Manual record output directory: {self.output_dir}")

@@ -15,7 +15,7 @@
     <param name="sensor_float_endian" value="$(arg sensor_float_endian)"/>
     <param name="sensor_type" value="$(arg sensor_type)"/>
     <!-- Manual record parameters -->
-    <param name="output_dir" value="$(env HOME)/sensor_data_collection/data"/>
+    <param name="output_dir" value="$(env HOME)/embedded_array_ws/src/sensor_data_collection/data"/>
     <param name="frames_to_average" value="10"/>
   </node>
 
@@ -34,7 +34,7 @@
     $ rostopic echo /serial_node_tdm/stm_manual_record/status
 
   输出文件:
-    ~/sensor_data_collection/data/manual_record_<timestamp>.csv
+    ~/embedded_array_ws/src/sensor_data_collection/data/manual_record_<timestamp>.csv
     - 37列: timestamp, sensor1_x, sensor1_y, sensor1_z, ..., sensor12_x, sensor12_y, sensor12_z
     - 每10帧平均为1行 (frames_to_average=10)
     - 单位: Gs, 6位小数
