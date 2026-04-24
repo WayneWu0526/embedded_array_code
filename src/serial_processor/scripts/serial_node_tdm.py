@@ -153,7 +153,7 @@ class SerialNodeTDM:
         rospy.loginfo(f"Using sensor type: {self._sensor_type}")
 
         # Manual record parameters
-        self.output_dir = os.path.expanduser(rospy.get_param('~output_dir', '~/sensor_data'))
+        self.output_dir = os.path.expanduser(rospy.get_param('~output_dir', '~/sensor_data_collection/data'))
         self.frames_to_average = int(rospy.get_param('~frames_to_average', 10))
         os.makedirs(self.output_dir, exist_ok=True)
         rospy.loginfo(f"Manual record output directory: {self.output_dir}")

@@ -15,7 +15,7 @@
     <param name="sensor_float_endian" value="$(arg sensor_float_endian)"/>
     <param name="sensor_type" value="$(arg sensor_type)"/>
     <!-- Manual record parameters -->
-    <param name="output_dir" value="$(env HOME)/sensor_data"/>
+    <param name="output_dir" value="$(env HOME)/sensor_data_collection/data"/>
     <param name="frames_to_average" value="10"/>
   </node>
 

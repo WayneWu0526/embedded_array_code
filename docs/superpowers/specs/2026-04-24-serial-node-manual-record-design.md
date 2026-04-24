@@ -23,7 +23,7 @@ Add a manual recording capability to `SerialNodeTDM` that saves raw Hall sensor 
 
 ### Output Format
 
-**CSV File:** `{output_dir}/manual_record_{timestamp}.csv`
+**CSV File:** `{output_dir}/manual_record_{timestamp}.csv` (default: `~/sensor_data_collection/data/`)
 
 **Columns (wide format, 37 columns + header):**
 
@@ -39,7 +39,7 @@ Add a manual recording capability to `SerialNodeTDM` that saves raw Hall sensor 
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `~output_dir` | string | `~/sensor_data` | Directory for CSV output |
+| `~output_dir` | string | `~/sensor_data_collection/data` | Directory for CSV output |
 | `~frames_to_average` | int | 10 | Number of frames to average per output row |
 
 ### State Machine
