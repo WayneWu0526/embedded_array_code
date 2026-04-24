@@ -1010,6 +1010,52 @@ def consistency_check_by_magnitude(
     }
 
 
+def batch_consistency_check_by_magnitude(
+    data_dir: Path,
+    magnitude_path: Path,
+    sensor_config: SensorArrayConfig = None,
+    intrinsic_params: IntrinsicParamsSet = None,
+    logger=None,
+) -> List[Dict]:
+    """
+    批量执行所有 channel 和 voltage 的 magnitude-based 一致性检验
+
+    遍历所有 channel (x, y, z) 和 voltage (5, 4, 3, 2, 1) 组合，
+    对每种组合调用 consistency_check_by_magnitude。
+
+    Args:
+        data_dir: .../sensor_data_collection/data 目录
+        magnitude_path: magnitude.txt 文件路径
+        sensor_config: 传感器配置 (默认 QMC6309)
+        intrinsic_params: 椭球校准内参
+        logger: 日志函数 (默认 print)
+
+    Returns:
+        List of results for each (channel, voltage) combination.
+        Each result is the dict returned by consistency_check_by_magnitude.
+    """
+    if logger is None:
+        def logger(*args, **kwargs):
+            print(*args, **kwargs)
+
+    results = []
+
+    for channel in ['x', 'y', 'z']:
+        for voltage in [5, 4, 3, 2, 1]:
+            result = consistency_check_by_magnitude(
+                data_dir=data_dir,
+                magnitude_path=magnitude_path,
+                sensor_config=sensor_config,
+                intrinsic_params=intrinsic_params,
+                channel=channel,
+                voltage=voltage,
+                logger=logger,
+            )
+            results.append(result)
+
+    return results
+
+
 def main():
     import argparse
 

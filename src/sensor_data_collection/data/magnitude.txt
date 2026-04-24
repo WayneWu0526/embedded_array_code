@@ -1,11 +1,11 @@
-chanel, z
+channel, z
 voltage, 5, 4, 3, 2, 1
 magnitude, 25.0, 20.0, 14.8, 9.4, 4.3
 
-chanel, y
+channel, y
 voltage, 5, 4, 3, 2, 1
 magnitude, 25.0, 20.0, 14.8, 10.0, 4.8
 
-chanel, x
+channel, x
 voltage, 5, 4, 3, 2, 1
 magnitude, 25.0, 19.8, 15.0, 9.7, 4.8
