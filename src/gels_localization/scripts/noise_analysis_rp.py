@@ -248,7 +248,7 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     # Plot — academic style
     fig, axes = plt.subplots(1, 2, figsize=(17.8 / 2.54, 12.0 / 2.54))
 
-    plt.rcParams['text.usetex'] = True
+    plt.rcParams['text.usetex'] = False
     plt.rcParams['font.family'] = 'serif'
     plt.rcParams['font.size'] = 16
     plt.rcParams['mathtext.fontset'] = 'cm'
