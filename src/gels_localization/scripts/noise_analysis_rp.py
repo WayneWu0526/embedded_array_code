@@ -200,47 +200,27 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
                                   noise_levels=None, sensor_ids=None, rng_seed=42,
                                   output_path=None):
     """
-    Run noise analysis across multiple moment magnitudes and plot all results.
-
-    Args:
-        json_path: path to cycle JSON file
-        magnitudes: list of moment magnitude values (all slots use same value)
-        num_samples: number of random ground-truth poses per magnitude
-        radius: sphere radius in meters
-        noise_levels: list of noise levels in Gs
-        sensor_ids: list of sensor IDs to use
-        rng_seed: random seed for reproducible ground-truth generation
-        output_path: path to save the plot
-
-    Returns:
-        dict: {magnitude: stats}
+    Collect all (SNR, error) pairs across all magnitudes, then plot scatter + fit.
     """
     if noise_levels is None:
         noise_levels = [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0]
 
-    # Load configuration directly without ROS
     from sensor_array_config import get_config
     config = get_config('QMC6309')
-    D_LIST_RAW = np.array(config.hardware.d_list)  # shape (12, 3)
+    D_LIST_RAW = np.array(config.hardware.d_list)
     GS_TO_TESLA_VAL = config.gs_to_si
 
-    # Patch into localization_service_node so build_D_cal works
     import localization_service_node as lsn
     lsn.D_LIST = D_LIST_RAW
     lsn.GS_TO_TESLA = GS_TO_TESLA_VAL
 
-    # Normalize magnitudes to [0, 1] for brightness (larger = darker)
-    m_min = min(magnitudes)
-    m_max = max(magnitudes)
-
-    all_stats = {}
-
-    print(f"Running multi-magnitude analysis: {len(magnitudes)} magnitudes x "
-          f"{len(noise_levels)} noise levels x {num_samples} samples...")
+    all_snr = []
+    all_pos_err = []
+    all_ori_err = []
 
     for mag in magnitudes:
         print(f"\n=== Moment magnitude = {mag} A·m² ===")
-        stats = run_noise_analysis_for_magnitude(
+        results = run_noise_analysis_for_magnitude(
             json_path=json_path,
             moment_magnitude=mag,
             D_LIST=D_LIST_RAW,
@@ -251,99 +231,82 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
             sensor_ids=sensor_ids,
             rng_seed=rng_seed
         )
-        all_stats[mag] = stats
+        for snr, pos_err, ori_err in results:
+            all_snr.append(snr)
+            all_pos_err.append(pos_err)
+            all_ori_err.append(ori_err)
+
+    all_snr = np.array(all_snr)
+    all_pos_err = np.array(all_pos_err)
+    all_ori_err = np.array(all_ori_err)
+
+    # Filter valid (non-nan, positive) points
+    valid_pos = ~(np.isnan(all_pos_err) | (all_pos_err <= 0))
+    valid_ori = ~(np.isnan(all_ori_err) | (all_ori_err <= 0))
 
     # Plot — academic style
-    # Figure size: 2-column, ~17.8cm wide, ~12cm tall
     fig, axes = plt.subplots(1, 2, figsize=(17.8 / 2.54, 12.0 / 2.54))
 
-    # Academic rendering — Computer Modern style
     plt.rcParams['text.usetex'] = False
     plt.rcParams['font.family'] = 'serif'
     plt.rcParams['font.size'] = 16
     plt.rcParams['mathtext.fontset'] = 'cm'
     plt.rcParams['axes.formatter.use_mathtext'] = True
 
-    def _set_x_ticks(ax, noise_levels):
-        """Format x tick labels as 10^{-5}, 10^{-4}, ... with mathtext."""
-        labels = [rf'$10^{{{int(np.log10(v)):.0f}}}$' for v in noise_levels]
-        ax.set_xticks(noise_levels)
-        ax.set_xticklabels(labels)
-        ax.yaxis.get_offset_text().set_visible(False)
-
-    def _set_y_ticks(ax):
-        """Set y tick labels as 10^{-2}, 10^{-1}, etc. with mathtext."""
-        ylims = ax.get_ylim()
-        from matplotlib.ticker import LogLocator
-        loc = LogLocator(base=10, numticks=8)
-        ticks = loc.tick_values(max(ylims[0], 1e-6), ylims[1])
-        ticks = [t for t in ticks if ylims[0] * 0.9 <= t <= ylims[1] * 1.1]
-        ticks = sorted(set(ticks))[:8]
-        ax.set_yticks(ticks)
-        ax.set_yticklabels([rf'$10^{{{int(np.log10(abs(t))):.0f}}}$' for t in ticks])
-
-    # Normalize for brightness
-    t_values = [(m - m_min) / (m_max - m_min) if m_max != m_min else 0.5 for m in magnitudes]
-
-    # Position error — blue tones (left subplot)
+    # ---- Position error subplot ----
     ax = axes[0]
-    for mag, t in zip(magnitudes, t_values):
-        stats = all_stats[mag]
-        pos_means = [stats[nl]['pos_mean'] * 1000 for nl in noise_levels]
-        pos_stds = [stats[nl]['pos_std'] * 1000 for nl in noise_levels]
-        # Blue: darker for larger magnitude (t -> darker)
-        base_color = np.array([0.0, 0.3, 1.0])  # blue base
-        alpha = 0.3 + 0.7 * t
-        color = tuple(base_color * alpha)
-        lbl = rf'$m = {mag:.0f}$'
-        # Connecting line
-        ax.plot(noise_levels, pos_means, '-', color=color, linewidth=1.0,
-                 solid_capstyle='round')
-        # Markers + error bars
-        ax.errorbar(noise_levels, pos_means, yerr=pos_stds,
-                    fmt='o', capsize=4, color=color, label=lbl,
-                    markersize=4, markeredgewidth=0.5,
-                    markeredgecolor=color, elinewidth=1.0)
+    snr_v = all_snr[valid_pos]
+    pos_v = all_pos_err[valid_pos] * 1000  # convert to mm
 
-    ax.set_xlabel(r'$\mathrm{Noise}$ $\mathrm{[Gs]}$', fontsize=16)
+    ax.scatter(snr_v, pos_v, alpha=0.3, s=10, color='steelblue', label='Samples')
+
+    # Power-law fit on log-log
+    log_snr = np.log10(snr_v)
+    log_pos = np.log10(pos_v)
+    coeffs = np.polyfit(log_snr, log_pos, 1)
+    b_pos, log_a_pos = coeffs[0], coeffs[1]
+    a_pos = 10**log_a_pos
+
+    # Fit line
+    snr_fit = np.logspace(np.log10(snr_v.min()), np.log10(snr_v.max()), 200)
+    pos_fit = a_pos * snr_fit**b_pos
+    ax.plot(snr_fit, pos_fit, 'r--', linewidth=1.5, label=f'Fit: $a={a_pos:.2e}$, $b={b_pos:.2f}$')
+
+    ax.set_xlabel(r'$\mathrm{SNR}$', fontsize=16)
     ax.set_ylabel(r'$\mathrm{Position\ Error}$ $\mathrm{[mm]}$', fontsize=16)
     ax.set_xscale('log')
     ax.set_yscale('log')
     ax.grid(True, alpha=0.3, which='both')
-    ax.legend(fontsize=12, loc='upper left', frameon=True, fancybox=False, edgecolor='black')
+    ax.legend(fontsize=11, loc='upper right')
     ax.tick_params(labelsize=14)
-    _set_x_ticks(ax, noise_levels)
-    _set_y_ticks(ax)
 
-    # Orientation error — orange tones (right subplot)
+    print(f"Position fit: error = {a_pos:.4e} * SNR^({b_pos:.4f})")
+
+    # ---- Orientation error subplot ----
     ax = axes[1]
-    for mag, t in zip(magnitudes, t_values):
-        stats = all_stats[mag]
-        ori_means = [np.degrees(stats[nl]['ori_mean']) for nl in noise_levels]
-        ori_stds = [np.degrees(stats[nl]['ori_std']) for nl in noise_levels]
-        # Orange: darker for larger magnitude (t -> darker)
-        base_color = np.array([1.0, 0.4, 0.0])  # orange base
-        alpha = 0.3 + 0.7 * t
-        color = tuple(base_color * alpha)
-        lbl = rf'$m = {mag:.0f}$'
-        # Connecting line
-        ax.plot(noise_levels, ori_means, '-', color=color, linewidth=1.0,
-                 solid_capstyle='round')
-        # Markers + error bars
-        ax.errorbar(noise_levels, ori_means, yerr=ori_stds,
-                    fmt='o', capsize=4, color=color, label=lbl,
-                    markersize=4, markeredgewidth=0.5,
-                    markeredgecolor=color, elinewidth=1.0)
+    snr_v = all_snr[valid_ori]
+    ori_v = np.degrees(all_ori_err[valid_ori])
 
-    ax.set_xlabel(r'$\mathrm{Noise}$ $\mathrm{[Gs]}$', fontsize=16)
+    ax.scatter(snr_v, ori_v, alpha=0.3, s=10, color='darkorange', label='Samples')
+
+    log_snr = np.log10(snr_v)
+    log_ori = np.log10(ori_v)
+    coeffs = np.polyfit(log_snr, log_ori, 1)
+    b_ori, log_a_ori = coeffs[0], coeffs[1]
+    a_ori = 10**log_a_ori
+
+    ori_fit = a_ori * snr_fit**b_ori
+    ax.plot(snr_fit, ori_fit, 'r--', linewidth=1.5, label=f'Fit: $a={a_ori:.2e}$, $b={b_ori:.2f}$')
+
+    ax.set_xlabel(r'$\mathrm{SNR}$', fontsize=16)
     ax.set_ylabel(r'$\mathrm{Orientation\ Error}$ $[^{\circ}]$', fontsize=16)
     ax.set_xscale('log')
     ax.set_yscale('log')
     ax.grid(True, alpha=0.3, which='both')
-    ax.legend(fontsize=12, loc='upper left', frameon=True, fancybox=False, edgecolor='black')
+    ax.legend(fontsize=11, loc='upper right')
     ax.tick_params(labelsize=14)
-    _set_x_ticks(ax, noise_levels)
-    _set_y_ticks(ax)
+
+    print(f"Orientation fit: error = {a_ori:.4e} * SNR^({b_ori:.4f})")
 
     plt.tight_layout(pad=0.5)
 
@@ -351,13 +314,11 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     if out_path is None:
         out_path = os.path.join(
             os.path.dirname(os.path.abspath(json_path)),
-            f'noise_analysis_rp_multi_m_cycle_{0:04d}.png'
+            f'noise_analysis_rp_snr_cycle_{0:04d}.png'
         )
     plt.savefig(out_path, dpi=150, bbox_inches='tight')
     print(f"\nPlot saved to: {out_path}")
     plt.close()
-
-    return all_stats
 
 
 def main():
