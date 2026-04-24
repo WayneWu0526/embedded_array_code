@@ -16,6 +16,7 @@ consistency_fit.py - Phase 2: 一致性校准算法
 import numpy as np
 import json
 import re
+import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, asdict
@@ -857,7 +858,8 @@ def load_manual_calibration_data(
     Returns:
         data: (N_samples, n_sensors, 3) 原始传感器数据
     """
-    import pandas as pd
+    if n_sensors < 1:
+        raise ValueError(f"n_sensors must be >= 1, got {n_sensors}")
 
     if channel not in ('x', 'y', 'z'):
         raise ValueError(f"channel must be 'x', 'y', or 'z', got '{channel}'")
@@ -870,8 +872,12 @@ def load_manual_calibration_data(
 
     df = pd.read_csv(csv_path)
     cols = [c for c in df.columns if c.startswith('sensor_')]
+    if not cols:
+        raise ValueError(f"No sensor_* columns found in {csv_path}")
     data = df[cols].values
     n_samples = data.shape[0]
+    if n_samples == 0:
+        raise ValueError(f"CSV file is empty: {csv_path}")
     reshaped = np.zeros((n_samples, n_sensors, 3))
     for i in range(n_sensors):
         reshaped[:, i, :] = data[:, i*3:(i+1)*3]
