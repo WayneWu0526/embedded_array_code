@@ -246,7 +246,7 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     valid_ori = valid_snr & ~(np.isnan(all_ori_err) | (all_ori_err <= 0))
 
     # Plot — academic style
-    fig, axes = plt.subplots(1, 2, figsize=(17.8 / 2.54, 12.0 / 2.54))
+    fig, axes = plt.subplots(1, 2, figsize=(17.8 / 2.54, 8.0 / 2.54))
 
     plt.rcParams.update({
         'text.usetex': False,
@@ -287,7 +287,7 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
         FuncFormatter(lambda v, _: rf'$10^{{{int(np.log10(v)):d}}}$' if v > 0 else '')
     )
     ax.grid(True, alpha=0.3, which='both')
-    ax.legend([r'$\mathrm{Samples}$', r'$\mathrm{Fit}$'], fontsize=11, loc='upper right')
+    ax.legend([r'$\mathrm{Fit}$', r'$\mathrm{Samples}$'], fontsize=11, loc='upper right')
     ax.tick_params(labelsize=14)
 
     print(f"Position fit: error = {a_pos:.4e} * SNR^({b_pos:.4f})")
@@ -320,7 +320,7 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
         FuncFormatter(lambda v, _: rf'$10^{{{int(np.log10(v)):d}}}$' if v > 0 else '')
     )
     ax.grid(True, alpha=0.3, which='both')
-    ax.legend([r'$\mathrm{Samples}$', r'$\mathrm{Fit}$'], fontsize=11, loc='upper right')
+    ax.legend([r'$\mathrm{Fit}$', r'$\mathrm{Samples}$'], fontsize=11, loc='upper right')
     ax.tick_params(labelsize=14)
 
     print(f"Orientation fit: error = {a_ori:.4e} * SNR^({b_ori:.4f})")
