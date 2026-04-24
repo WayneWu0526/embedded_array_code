@@ -40,6 +40,8 @@ class ManualRecorder:
         self._file = None
         self._buffer = []  # list of StmUplink messages
         self._csv_path = None
+        if self.frames_to_average <= 0:
+            raise ValueError("frames_to_average must be positive")
 
     @property
     def state(self):
@@ -82,9 +84,14 @@ class ManualRecorder:
         if self._state == self.STATE_IDLE:
             ts = datetime.now().strftime('%Y%m%d_%H%M%S')
             self._csv_path = os.path.join(self.output_dir, f'manual_record_{ts}.csv')
-            self._file = open(self._csv_path, 'w')
-            self._write_header(self._file)
-            rospy.loginfo(f"[ManualRecorder] Recording started: {self._csv_path}")
+            try:
+                self._file = open(self._csv_path, 'w')
+                self._write_header(self._file)
+                rospy.loginfo(f"[ManualRecorder] Recording started: {self._csv_path}")
+            except IOError as e:
+                rospy.logerr(f"[ManualRecorder] Failed to open file for writing: {e}")
+                self._state = self.STATE_IDLE
+                return
         self._state = self.STATE_RECORDING
 
     def _pause_recording(self):
