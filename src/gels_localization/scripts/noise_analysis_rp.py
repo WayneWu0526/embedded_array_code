@@ -248,7 +248,7 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     # Plot — academic style
     fig, axes = plt.subplots(1, 2, figsize=(17.8 / 2.54, 12.0 / 2.54))
 
-    plt.rcParams['text.usetex'] = False
+    plt.rcParams['text.usetex'] = True
     plt.rcParams['font.family'] = 'serif'
     plt.rcParams['font.size'] = 16
     plt.rcParams['mathtext.fontset'] = 'cm'
@@ -271,7 +271,7 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     # Fit line
     snr_fit_pos = np.logspace(np.log10(snr_v.min()), np.log10(snr_v.max()), 200)
     pos_fit = a_pos * snr_fit_pos**b_pos
-    ax.plot(snr_fit_pos, pos_fit, 'r--', linewidth=1.5, label=f'Fit: $a={a_pos:.2e}$, $b={b_pos:.2f}$')
+    ax.plot(snr_fit_pos, pos_fit, 'k-', linewidth=1.5, label='Fit')
 
     ax.set_xlabel(r'$\mathrm{SNR}$', fontsize=16)
     ax.set_ylabel(r'$\mathrm{Position\ Error}$ $\mathrm{[mm]}$', fontsize=16)
@@ -298,7 +298,7 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
 
     snr_fit_ori = np.logspace(np.log10(snr_v.min()), np.log10(snr_v.max()), 200)
     ori_fit = a_ori * snr_fit_ori**b_ori
-    ax.plot(snr_fit_ori, ori_fit, 'r--', linewidth=1.5, label=f'Fit: $a={a_ori:.2e}$, $b={b_ori:.2f}$')
+    ax.plot(snr_fit_ori, ori_fit, 'k-', linewidth=1.5, label='Fit')
 
     ax.set_xlabel(r'$\mathrm{SNR}$', fontsize=16)
     ax.set_ylabel(r'$\mathrm{Orientation\ Error}$ $[^{\circ}]$', fontsize=16)
