@@ -55,7 +55,6 @@ class ManualRecorder:
         """Compute per-sensor average from buffered StmUplink messages."""
         if not self._buffer:
             return None
-        first = self._buffer[0]
         n = len(self._buffer)
         sum_x = [0.0] * self.n_sensors
         sum_y = [0.0] * self.n_sensors
@@ -174,6 +173,15 @@ class SerialNodeTDM:
         # Load R_CORR rotation correction matrices
         self._load_sensor_array_params()
 
+        # Initialize manual recorder
+        self.recorder = ManualRecorder(self.output_dir, self.frames_to_average)
+        # Subscribe to own stm_uplink_raw for recording (self-subscribe)
+        self.sub_record = rospy.Subscriber('stm_uplink_raw', StmUplink, self._on_uplink_raw_record)
+        # Subscribe to trigger
+        self.sub_trigger = rospy.Subscriber('~record_trigger', Bool, self._on_record_trigger)
+        # Status publisher
+        self.pub_status = rospy.Publisher('stm_manual_record/status', String, queue_size=10)
+
         # Subscriber for downlink commands
         self.sub = rospy.Subscriber('stm_downlink', StmDownlink, self._downlink_callback)
 
@@ -181,6 +189,9 @@ class SerialNodeTDM:
             f"SerialNodeTDM initialized: {self.port} at {self.baudrate} baud, "
             f"sensor_float_endian={self.float_endian_name}"
         )
+
+        # Register shutdown handler
+        rospy.on_shutdown(self._on_shutdown_record)
 
     def _resolve_serial_port(self, configured_port):
         """
@@ -288,6 +299,19 @@ class SerialNodeTDM:
         for idx, entry in enumerate(hw.R_CORR):
             for sid in entry.sensor_ids:
                 self._sensor_to_group[sid] = idx + 1
+
+    def _on_record_trigger(self, msg):
+        """Handle record trigger (Bool)."""
+        enable = msg.data
+        self.recorder.trigger(enable)
+        self.pub_status.publish(String(data=self.recorder.state))
+
+    def _on_uplink_raw_record(self, msg):
+        """Process stm_uplink_raw for recording."""
+        self.recorder.on_uplink_raw(msg)
+
+    def _on_shutdown_record(self):
+        self.recorder.flush_and_close()
 
     def _apply_ellipsoid_correction(self, raw_x, raw_y, raw_z, sensor_id):
         """Apply ellipsoid correction to raw sensor data.
