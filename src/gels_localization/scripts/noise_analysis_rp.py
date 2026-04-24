@@ -83,10 +83,11 @@ def generate_synthetic_B_meas_for_pose(p_sensor_array, R_sensor_array, D_LIST,
         p_Ci = src['p_Ci']
         m_Ci = src['m_Ci']
 
-        # Clean field at center (no offset)
+        # Clean field at center (no offset), converted to Gs
         b_global_center, _ = mag_dipole_model(p_sensor_array, m_Ci, p_Ci, order=1)
         b_sensor_center = R_sensor_array.T @ b_global_center
-        b_local_norms.append(np.linalg.norm(b_sensor_center))
+        b_sensor_center_gs = b_sensor_center / gs_to_tesla
+        b_local_norms.append(np.linalg.norm(b_sensor_center_gs))
 
         B_meas = np.zeros((3, len(sensor_ids)))
         for col_idx, sid in enumerate(sensor_ids):
