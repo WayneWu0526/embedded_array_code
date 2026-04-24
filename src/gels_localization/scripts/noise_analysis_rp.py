@@ -255,6 +255,8 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
         'font.size': 16,
     })
 
+    from matplotlib.ticker import LogLocator, FuncFormatter
+
     # ---- Position error subplot ----
     ax = axes[0]
     snr_v = all_snr[valid_pos]
@@ -280,6 +282,10 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     ax.set_yscale('log')
     ax.set_xticks([1e1, 1e2, 1e3, 1e4, 1e5])
     ax.set_xticklabels([r'$10^1$', r'$10^2$', r'$10^3$', r'$10^4$', r'$10^5$'])
+    ax.yaxis.set_major_locator(LogLocator(base=10))
+    ax.yaxis.set_major_formatter(
+        FuncFormatter(lambda v, _: rf'$10^{{{int(np.log10(v)):d}}}$' if v > 0 else '')
+    )
     ax.grid(True, alpha=0.3, which='both')
     ax.legend([r'$\mathrm{Samples}$', r'$\mathrm{Fit}$'], fontsize=11, loc='upper right')
     ax.tick_params(labelsize=14)
@@ -309,6 +315,10 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     ax.set_yscale('log')
     ax.set_xticks([1e1, 1e2, 1e3, 1e4, 1e5])
     ax.set_xticklabels([r'$10^1$', r'$10^2$', r'$10^3$', r'$10^4$', r'$10^5$'])
+    ax.yaxis.set_major_locator(LogLocator(base=10))
+    ax.yaxis.set_major_formatter(
+        FuncFormatter(lambda v, _: rf'$10^{{{int(np.log10(v)):d}}}$' if v > 0 else '')
+    )
     ax.grid(True, alpha=0.3, which='both')
     ax.legend([r'$\mathrm{Samples}$', r'$\mathrm{Fit}$'], fontsize=11, loc='upper right')
     ax.tick_params(labelsize=14)
