@@ -74,11 +74,19 @@ def generate_synthetic_B_meas_for_pose(p_sensor_array, R_sensor_array, D_LIST,
 
     Returns:
         B_meas_cell: list of 3 x N matrices (one per source/slot)
+        b_local_norm: float, |b_local| in Gs at array center (no offset)
     """
     B_meas_cell = []
+    b_local_norms = []  # per-source clean field norms at center
+
     for src in sources:
         p_Ci = src['p_Ci']
         m_Ci = src['m_Ci']
+
+        # Clean field at center (no offset)
+        b_global_center, _ = mag_dipole_model(p_sensor_array, m_Ci, p_Ci, order=1)
+        b_sensor_center = R_sensor_array.T @ b_global_center
+        b_local_norms.append(np.linalg.norm(b_sensor_center))
 
         B_meas = np.zeros((3, len(sensor_ids)))
         for col_idx, sid in enumerate(sensor_ids):
@@ -89,10 +97,7 @@ def generate_synthetic_B_meas_for_pose(p_sensor_array, R_sensor_array, D_LIST,
             b_global, _ = mag_dipole_model(p_sensor_global, m_Ci, p_Ci, order=1)
             b_sensor = R_sensor_array.T @ b_global
 
-            # Convert to Gs
             b_sensor_gs = b_sensor / gs_to_tesla
-
-            # Add noise in Gs
             if noise_level > 0:
                 b_sensor_gs = b_sensor_gs + noise_level * np.random.randn(3)
 
@@ -100,7 +105,8 @@ def generate_synthetic_B_meas_for_pose(p_sensor_array, R_sensor_array, D_LIST,
 
         B_meas_cell.append(B_meas)
 
-    return B_meas_cell
+    b_local_norm = np.linalg.norm(b_local_norms)  # RSS across sources, in Gs
+    return B_meas_cell, b_local_norm
 
 
 def build_sources_from_json(json_path, moment_magnitude):
@@ -176,7 +182,7 @@ def run_noise_analysis_for_magnitude(json_path, moment_magnitude, D_LIST, gs_to_
 
     for nl_idx, noise_level in enumerate(noise_levels):
         for sample_idx, (p_gt, R_gt) in enumerate(random_poses):
-            B_meas_cell = generate_synthetic_B_meas_for_pose(
+            B_meas_cell, b_local_norm = generate_synthetic_B_meas_for_pose(
                 p_gt, R_gt, D_LIST, gs_to_tesla, sources, sensor_ids, noise_level=noise_level
             )
 
