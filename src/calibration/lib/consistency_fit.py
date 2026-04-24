@@ -884,6 +884,132 @@ def load_manual_calibration_data(
     return reshaped
 
 
+def consistency_check_by_magnitude(
+    data_dir: Path,
+    magnitude_path: Path,
+    sensor_config: SensorArrayConfig = None,
+    intrinsic_params: IntrinsicParamsSet = None,
+    channel: str = 'x',
+    voltage: int = 5,
+    logger=None,
+) -> Dict:
+    """
+    基于 magnitude.txt 参考值进行一致性检验
+
+    算法：
+    1. 解析 magnitude.txt 获取指定 channel/voltage 的参考磁场强度
+    2. 加载 manual_{channel}/manual_record_{voltage}V.csv 原始数据
+    3. 对每颗传感器应用椭球校准: b_corr = C_i @ (b_raw - o_i)
+    4. 计算每行校准后数据的模值: |b_corr|
+    5. 计算比例系数: ratio = reference_magnitude / |b_corr|
+    6. 统计各传感器的 mean_ratio 和 std_ratio
+
+    Args:
+        data_dir: .../sensor_data_collection/data 目录
+        magnitude_path: magnitude.txt 文件路径
+        sensor_config: 传感器配置 (默认 QMC6309)
+        intrinsic_params: 椭球校准内参 (o_i, C_i)
+        channel: 'x', 'y', or 'z'
+        voltage: 1, 2, 3, 4, 5
+        logger: 日志函数 (默认 print)
+
+    Returns:
+        {
+            'channel': channel,
+            'voltage': voltage,
+            'reference_magnitude': float,
+            'sensor_results': {
+                sensor_id: {
+                    'mean_ratio': float,
+                    'std_ratio': float,
+                    'calibrated_magnitudes': [float],  # list of |b_corr| per sample
+                }
+            }
+        }
+    """
+    if logger is None:
+        def logger(*args, **kwargs):
+            print(*args, **kwargs)
+
+    if sensor_config is None:
+        sensor_config = get_config("QMC6309")
+    n_sensors = sensor_config.manifest.n_sensors
+
+    # Step 1: 解析 magnitude.txt 获取参考磁场强度
+    magnitude_data = parse_magnitude_txt(magnitude_path)
+    if channel not in magnitude_data:
+        raise ValueError(f"Channel '{channel}' not found in magnitude.txt. Available: {list(magnitude_data.keys())}")
+    if voltage not in magnitude_data[channel]:
+        raise ValueError(f"Voltage {voltage} not found for channel '{channel}'. Available: {list(magnitude_data[channel].keys())}")
+
+    reference_magnitude = magnitude_data[channel][voltage]
+
+    # Step 2: 加载手动标定原始数据
+    raw_data = load_manual_calibration_data(data_dir, channel, voltage, n_sensors)
+    n_samples = raw_data.shape[0]
+
+    # Step 3-6: 对每颗传感器应用椭球校正，计算模值和比例系数
+    sensor_results = {}
+
+    for i in range(n_sensors):
+        sensor_id = i + 1
+        b_raw = raw_data[:, i, :]  # (N, 3)
+
+        # 应用椭球校准（如果提供了 intrinsic_params）
+        if intrinsic_params is not None:
+            o_i = np.array(intrinsic_params.params[sensor_id].o_i)
+            C_i = np.array(intrinsic_params.params[sensor_id].C_i)
+            b_corr = apply_ellipsoid_correction_to_data(b_raw, o_i, C_i)
+        else:
+            b_corr = b_raw
+
+        # Step 4: 计算校准后数据的模值
+        magnitudes = np.linalg.norm(b_corr, axis=1)  # (N,)
+
+        # Step 5: 计算比例系数
+        ratios = reference_magnitude / magnitudes
+
+        # Step 6: 统计 mean_ratio 和 std_ratio
+        mean_ratio = float(np.mean(ratios))
+        std_ratio = float(np.std(ratios))
+
+        sensor_results[sensor_id] = {
+            'mean_ratio': mean_ratio,
+            'std_ratio': std_ratio,
+            'calibrated_magnitudes': magnitudes.tolist(),
+        }
+
+    # 打印统计信息
+    logger("\n" + "=" * 50)
+    logger("Consistency Check by Magnitude")
+    logger("=" * 50)
+    logger(f"  Channel: {channel}, Voltage: {voltage}V")
+    logger(f"  Reference magnitude: {reference_magnitude:.4f}")
+    logger(f"  Number of samples: {n_samples}")
+    logger(f"  Number of sensors: {n_sensors}")
+    logger("-" * 50)
+    logger(f"  {'Sensor':<10} {'Mean Ratio':>12} {'Std Ratio':>12}")
+    logger(f"  {'-'*36}")
+    for sid in range(1, n_sensors + 1):
+        sr = sensor_results[sid]
+        logger(f"  {sid:<10} {sr['mean_ratio']:>12.4f} {sr['std_ratio']:>12.4f}")
+    logger(f"  {'-'*36}")
+
+    # Overall statistics
+    all_mean_ratios = [sensor_results[sid]['mean_ratio'] for sid in range(1, n_sensors + 1)]
+    all_std_ratios = [sensor_results[sid]['std_ratio'] for sid in range(1, n_sensors + 1)]
+    logger(f"  {'Overall Mean:':<10} {np.mean(all_mean_ratios):>12.4f} {np.std(all_mean_ratios):>12.4f}")
+    logger(f"  {'Overall Std:':<10} {np.std(all_mean_ratios):>12.4f} {np.std(all_std_ratios):>12.4f}")
+    logger("=" * 50)
+
+    return {
+        'channel': channel,
+        'voltage': voltage,
+        'reference_magnitude': reference_magnitude,
+        'sensor_results': sensor_results,
+    }
+
+
 def main():
     import argparse
 
