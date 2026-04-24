@@ -627,23 +627,40 @@ def run_magnitude_check(args):
     data_dir = Path(__file__).parent.parent.parent / 'sensor_data_collection' / 'data'
     magnitude_path = data_dir / 'magnitude.txt'
 
-    sensor_config = get_config(args.sensor_type)
+    try:
+        sensor_config = get_config(args.sensor_type)
+    except Exception as e:
+        rospy.logerr(f"Failed to load sensor config '{args.sensor_type}': {e}")
+        return
     intrinsic_params = sensor_config.intrinsic
 
     if args.batch:
-        rospy.loginfo("Batch mode not yet implemented, running single check.")
-        result = consistency_check_by_magnitude(
-            data_dir=data_dir,
-            magnitude_path=magnitude_path,
-            sensor_config=sensor_config,
-            intrinsic_params=intrinsic_params,
-            channel=args.channel,
-            voltage=args.voltage,
-            logger=rospy.loginfo
-        )
-        rospy.loginfo(f"Batch check complete: 1 combination checked.")
+        # Try to use batch function if available
+        try:
+            from consistency_fit import batch_consistency_check_by_magnitude
+            results = batch_consistency_check_by_magnitude(
+                data_dir=data_dir,
+                magnitude_path=magnitude_path,
+                sensor_config=sensor_config,
+                intrinsic_params=intrinsic_params,
+                logger=rospy.loginfo
+            )
+            rospy.loginfo(f"Batch check complete: {len(results)} combinations checked.")
+        except (ImportError, AttributeError):
+            # batch function not available yet, fall back to single check
+            rospy.loginfo("Batch mode not yet implemented, running single check...")
+            consistency_check_by_magnitude(
+                data_dir=data_dir,
+                magnitude_path=magnitude_path,
+                sensor_config=sensor_config,
+                intrinsic_params=intrinsic_params,
+                channel=args.channel,
+                voltage=args.voltage,
+                logger=rospy.loginfo
+            )
+            rospy.loginfo("Magnitude check complete.")
     else:
-        result = consistency_check_by_magnitude(
+        consistency_check_by_magnitude(
             data_dir=data_dir,
             magnitude_path=magnitude_path,
             sensor_config=sensor_config,
