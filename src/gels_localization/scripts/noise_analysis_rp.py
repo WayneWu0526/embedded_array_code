@@ -240,9 +240,10 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     all_pos_err = np.array(all_pos_err)
     all_ori_err = np.array(all_ori_err)
 
-    # Filter valid (non-nan, positive) points
-    valid_pos = ~(np.isnan(all_pos_err) | (all_pos_err <= 0))
-    valid_ori = ~(np.isnan(all_ori_err) | (all_ori_err <= 0))
+    # Filter valid (finite SNR, non-nan, positive) points
+    valid_snr = np.isfinite(all_snr)
+    valid_pos = valid_snr & ~(np.isnan(all_pos_err) | (all_pos_err <= 0))
+    valid_ori = valid_snr & ~(np.isnan(all_ori_err) | (all_ori_err <= 0))
 
     # Plot — academic style
     fig, axes = plt.subplots(1, 2, figsize=(17.8 / 2.54, 12.0 / 2.54))
@@ -268,9 +269,9 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     a_pos = 10**log_a_pos
 
     # Fit line
-    snr_fit = np.logspace(np.log10(snr_v.min()), np.log10(snr_v.max()), 200)
-    pos_fit = a_pos * snr_fit**b_pos
-    ax.plot(snr_fit, pos_fit, 'r--', linewidth=1.5, label=f'Fit: $a={a_pos:.2e}$, $b={b_pos:.2f}$')
+    snr_fit_pos = np.logspace(np.log10(snr_v.min()), np.log10(snr_v.max()), 200)
+    pos_fit = a_pos * snr_fit_pos**b_pos
+    ax.plot(snr_fit_pos, pos_fit, 'r--', linewidth=1.5, label=f'Fit: $a={a_pos:.2e}$, $b={b_pos:.2f}$')
 
     ax.set_xlabel(r'$\mathrm{SNR}$', fontsize=16)
     ax.set_ylabel(r'$\mathrm{Position\ Error}$ $\mathrm{[mm]}$', fontsize=16)
@@ -295,8 +296,9 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     b_ori, log_a_ori = coeffs[0], coeffs[1]
     a_ori = 10**log_a_ori
 
-    ori_fit = a_ori * snr_fit**b_ori
-    ax.plot(snr_fit, ori_fit, 'r--', linewidth=1.5, label=f'Fit: $a={a_ori:.2e}$, $b={b_ori:.2f}$')
+    snr_fit_ori = np.logspace(np.log10(snr_v.min()), np.log10(snr_v.max()), 200)
+    ori_fit = a_ori * snr_fit_ori**b_ori
+    ax.plot(snr_fit_ori, ori_fit, 'r--', linewidth=1.5, label=f'Fit: $a={a_ori:.2e}$, $b={b_ori:.2f}$')
 
     ax.set_xlabel(r'$\mathrm{SNR}$', fontsize=16)
     ax.set_ylabel(r'$\mathrm{Orientation\ Error}$ $[^{\circ}]$', fontsize=16)
@@ -314,7 +316,7 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     if out_path is None:
         out_path = os.path.join(
             os.path.dirname(os.path.abspath(json_path)),
-            f'noise_analysis_rp_snr_cycle_{0:04d}.png'
+            f'noise_analysis_rp_snr.png'
         )
     plt.savefig(out_path, dpi=150, bbox_inches='tight')
     print(f"\nPlot saved to: {out_path}")
@@ -365,7 +367,7 @@ def main():
 
     noise_levels = [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0]
 
-    all_stats = run_multi_magnitude_analysis(
+    run_multi_magnitude_analysis(
         json_path,
         magnitudes=magnitudes,
         num_samples=args.samples,
@@ -375,31 +377,6 @@ def main():
         rng_seed=args.seed,
         output_path=args.output
     )
-
-    # Print summary table
-    print("\n" + "=" * 100)
-    print("Summary: Position Error (mm) — rows=magnitudes, cols=noise levels")
-    print("=" * 100)
-    hdr = f"{'m':>6}" + "".join([f"{nl:>10.0e}" for nl in noise_levels])
-    print(hdr)
-    print("-" * (6 + 10 * len(noise_levels)))
-    for mag in magnitudes:
-        row = f"{mag:>6.0f}"
-        for nl in noise_levels:
-            row += f"{all_stats[mag][nl]['pos_mean']*1000:>10.4f}"
-        print(row)
-
-    print()
-    print("=" * 100)
-    print("Summary: Orientation Error (deg) — rows=magnitudes, cols=noise levels")
-    print("=" * 100)
-    print(hdr)
-    print("-" * (6 + 10 * len(noise_levels)))
-    for mag in magnitudes:
-        row = f"{mag:>6.0f}"
-        for nl in noise_levels:
-            row += f"{np.degrees(all_stats[mag][nl]['ori_mean']):>10.4f}"
-        print(row)
 
 
 if __name__ == '__main__':
