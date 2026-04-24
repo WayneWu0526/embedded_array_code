@@ -149,18 +149,15 @@ def run_noise_analysis_for_magnitude(json_path, moment_magnitude, D_LIST, gs_to_
         gs_to_tesla: conversion from Gs to Tesla
 
     Returns:
-        dict: stats per noise level
+        list of (SNR, pos_error, ori_error) tuples for ALL samples
     """
     if noise_levels is None:
         noise_levels = [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0]
 
-    # Build sources with given magnitude
     sources, req = build_sources_from_json(json_path, moment_magnitude)
-
     if sensor_ids is None:
         sensor_ids = list(req.sensor_ids)
 
-    # Extract ground truth pose
     gt = req.ground_truth_pose
     p_gt_original = np.array([gt.position.x, gt.position.y, gt.position.z])
     R_gt_original = quaternion_to_rotation_matrix(np.array([
@@ -170,7 +167,6 @@ def run_noise_analysis_for_magnitude(json_path, moment_magnitude, D_LIST, gs_to_
     M = len(sources)
     D_cal = build_D_cal(sensor_ids)
 
-    # Pre-generate random ground truths (reproducible per magnitude to keep fair comparison)
     rng = np.random.default_rng(rng_seed)
     random_poses = []
     for i in range(num_samples):
@@ -178,8 +174,7 @@ def run_noise_analysis_for_magnitude(json_path, moment_magnitude, D_LIST, gs_to_
         R_rand = sample_random_rotation()
         random_poses.append((p_rand, R_rand))
 
-    # Results storage
-    results = {nl: {'pos': [], 'ori': []} for nl in noise_levels}
+    all_results = []  # (SNR, pos_error, ori_error)
 
     for nl_idx, noise_level in enumerate(noise_levels):
         for sample_idx, (p_gt, R_gt) in enumerate(random_poses):
@@ -187,40 +182,18 @@ def run_noise_analysis_for_magnitude(json_path, moment_magnitude, D_LIST, gs_to_
                 p_gt, R_gt, D_LIST, gs_to_tesla, sources, sensor_ids, noise_level=noise_level
             )
 
+            SNR = b_local_norm / noise_level if noise_level > 0 else np.inf
+
             try:
                 R_est, p_est, details = MaPS_Estimator(D_cal, sources, B_meas_cell)
             except Exception:
-                results[noise_level]['pos'].append(np.nan)
-                results[noise_level]['ori'].append(np.nan)
                 continue
 
             pos_error = np.linalg.norm(p_est - p_gt)
             ori_error = compute_rotation_error(R_est, R_gt)
+            all_results.append((SNR, pos_error, ori_error))
 
-            results[noise_level]['pos'].append(pos_error)
-            results[noise_level]['ori'].append(ori_error)
-
-        valid_pos = [e for e in results[noise_level]['pos'] if not np.isnan(e)]
-        if valid_pos:
-            valid_ori = [e for e in results[noise_level]['ori'] if not np.isnan(e)]
-            print(f"  m={moment_magnitude:.0f}, noise={noise_level:.1e}: "
-                  f"{len(valid_pos)}/{num_samples} ok, "
-                  f"pos={np.mean(valid_pos)*1000:.4f}mm, ori={np.degrees(np.mean(valid_ori)):.4f}deg")
-
-    # Compute statistics
-    stats = {}
-    for nl in noise_levels:
-        pos_arr = np.array([e for e in results[nl]['pos'] if not np.isnan(e)])
-        ori_arr = np.array([e for e in results[nl]['ori'] if not np.isnan(e)])
-        stats[nl] = {
-            'pos_mean': np.mean(pos_arr) if len(pos_arr) > 0 else np.nan,
-            'pos_std': np.std(pos_arr) if len(pos_arr) > 0 else np.nan,
-            'ori_mean': np.mean(ori_arr) if len(ori_arr) > 0 else np.nan,
-            'ori_std': np.std(ori_arr) if len(ori_arr) > 0 else np.nan,
-            'n_valid': len(pos_arr),
-        }
-
-    return stats
+    return all_results
 
 
 def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=0.05,
