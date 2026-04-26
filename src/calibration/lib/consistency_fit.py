@@ -1213,6 +1213,44 @@ def compute_sensor_gains(
     return results
 
 
+def compute_rowwise_sensor_consistency_metric(
+    data: np.ndarray,
+    sensor_ids: List[int] = None,
+) -> Dict:
+    """
+    计算逐行传感器间分量标准差（within-row sensor std）
+
+    对数据形状 (N, 12, 3)，对每一行的 12 个传感器计算 x/y/z 三个分量的 std。
+
+    Args:
+        data: (N, 12, 3) 数据
+        sensor_ids: 可选，传感器 ID 列表（不用于计算，仅保留在返回中）
+
+    Returns:
+        包含聚合指标的字典
+    """
+    data = np.asarray(data)
+    assert data.ndim == 3 and data.shape[1] == 12, \
+        f"Expected (N, 12, 3), got {data.shape}"
+    n_rows = data.shape[0]
+
+    std_x_per_row = np.std(data[:, :, 0], axis=1)
+    std_y_per_row = np.std(data[:, :, 1], axis=1)
+    std_z_per_row = np.std(data[:, :, 2], axis=1)
+
+    all_stds = np.concatenate([std_x_per_row, std_y_per_row, std_z_per_row])
+
+    return {
+        'grand_mean_std': float(np.mean(all_stds)),
+        'grand_max_std': float(np.max(all_stds)),
+        'percentile_95_std': float(np.percentile(all_stds, 95)),
+        'std_x_per_row': std_x_per_row,
+        'std_y_per_row': std_y_per_row,
+        'std_z_per_row': std_z_per_row,
+        'n_rows': n_rows,
+    }
+
+
 def main():
     import argparse
 
