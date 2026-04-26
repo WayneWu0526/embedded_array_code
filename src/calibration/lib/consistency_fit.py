@@ -1367,6 +1367,58 @@ def compare_calibration_methods(
                 'path_b': compute_rowwise_sensor_consistency_metric(vb),
             }
 
+    # ---------- 新增：逐 sensor 逐 channel/voltage 模值重复性指标 ----------
+    # 对每颗传感器、每个 channel/voltage，计算跨行模值 std（衡量单传感器重复性）
+    per_sensor_mag_std = {}
+    for sid in range(1, n_sensors + 1):
+        sid_key = f"sensor_{sid}"
+        per_sensor_mag_std[sid_key] = {}
+        for ch in channels:
+            per_sensor_mag_std[sid_key][ch] = {}
+            for v in VOLTAGE_ORDER:
+                # 找到对应 channel/voltage 的原始索引
+                for idx, (c, volt, _) in enumerate(all_raw_data):
+                    if c == ch and volt == v:
+                        # Path A: (N, 3) 取第 sid-1 号传感器 → 计算每行模值 → std across rows
+                        mag_a = np.linalg.norm(all_path_a_concat[idx][:, sid-1, :], axis=1)
+                        mag_b = np.linalg.norm(all_path_b_concat[idx][:, sid-1, :], axis=1)
+                        per_sensor_mag_std[sid_key][ch][v] = {
+                            'path_a': float(np.std(mag_a)),
+                            'path_b': float(np.std(mag_b)),
+                        }
+                        break
+
+    # 聚合到 per-sensor 级别（跨所有 channel/voltage 的平均）
+    per_sensor_agg = {}
+    for sid in range(1, n_sensors + 1):
+        sid_key = f"sensor_{sid}"
+        all_a = []
+        all_b = []
+        for ch in channels:
+            for v in VOLTAGE_ORDER:
+                if sid_key in per_sensor_mag_std and ch in per_sensor_mag_std[sid_key] and v in per_sensor_mag_std[sid_key][ch]:
+                    all_a.append(per_sensor_mag_std[sid_key][ch][v]['path_a'])
+                    all_b.append(per_sensor_mag_std[sid_key][ch][v]['path_b'])
+        if all_a:
+            per_sensor_agg[sid_key] = {
+                'path_a': float(np.mean(all_a)),
+                'path_b': float(np.mean(all_b)),
+            }
+
+    # 聚合到总体（跨所有 sensor/channel/voltage）
+    all_mag_a = []
+    all_mag_b = []
+    for sid_key in per_sensor_agg:
+        for ch in channels:
+            for v in VOLTAGE_ORDER:
+                if ch in per_sensor_mag_std[sid_key] and v in per_sensor_mag_std[sid_key][ch]:
+                    all_mag_a.append(per_sensor_mag_std[sid_key][ch][v]['path_a'])
+                    all_mag_b.append(per_sensor_mag_std[sid_key][ch][v]['path_b'])
+    grand_mag_std = {
+        'path_a': float(np.mean(all_mag_a)),
+        'path_b': float(np.mean(all_mag_b)),
+    }
+
     result = {
         'path_a': {
             'method': 'R_CORR × b_raw',
@@ -1379,6 +1431,9 @@ def compare_calibration_methods(
         'per_channel_results': per_channel_results,
         'per_voltage_results': per_voltage_results,
         'total_samples': all_path_a.shape[0],
+        'per_sensor_mag_std': per_sensor_mag_std,
+        'per_sensor_agg': per_sensor_agg,
+        'grand_mag_std': grand_mag_std,
     }
 
     # 打印摘要
@@ -1413,6 +1468,42 @@ def compare_calibration_methods(
             imp = (ma - mb) / (ma + 1e-10) * 100
             logger(f"    {v}V: mean_std A={ma:.4f}, B={mb:.4f}, imp={imp:+.1f}%")
 
+    # ---------- 打印新指标：逐 sensor 模值重复性 ----------
+    logger("")
+    logger("Within-Sensor Magnitude Repeatability (std of |b| across rows, per sensor)")
+    logger("=" * 80)
+    logger(f"  {'Sensor':<12} {'Path A (Raw)':>15} {'Path B (Full)':>15} {'Improvement':>12}")
+    logger(f"  {'-' * 60}")
+    improvements = []
+    for sid in range(1, n_sensors + 1):
+        sid_key = f"sensor_{sid}"
+        if sid_key in per_sensor_agg:
+            ma = per_sensor_agg[sid_key]['path_a']
+            mb = per_sensor_agg[sid_key]['path_b']
+            imp = (ma - mb) / (ma + 1e-10) * 100
+            improvements.append(imp)
+            logger(f"  {sid_key:<12} {ma:>15.6f} {mb:>15.6f} {imp:>+11.1f}%")
+    logger(f"  {'-' * 60}")
+    if improvements:
+        logger(f"  {'Mean improvement:':<12} {np.mean(improvements):>+11.1f}%  "
+               f"(Path A mean={grand_mag_std['path_a']:.4f}, Path B mean={grand_mag_std['path_b']:.4f})")
+    logger("=" * 80)
+    logger("")
+    logger("  Per-sensor, per-channel, per-voltage magnitude std detail:")
+    for sid in range(1, n_sensors + 1):
+        sid_key = f"sensor_{sid}"
+        logger(f"    --- {sid_key} ---")
+        for ch in channels:
+            if ch in per_sensor_mag_std.get(sid_key, {}):
+                for v in VOLTAGE_ORDER:
+                    if v in per_sensor_mag_std[sid_key][ch]:
+                        ma = per_sensor_mag_std[sid_key][ch][v]['path_a']
+                        mb = per_sensor_mag_std[sid_key][ch][v]['path_b']
+                        imp = (ma - mb) / (ma + 1e-10) * 100
+                        logger(f"      {ch.upper()} @ {v}V: raw={ma:.4f}, calib={mb:.4f}, imp={imp:+.1f}%")
+    logger("=" * 80)
+
+    logger("")
     logger("=" * 60)
 
     return result
