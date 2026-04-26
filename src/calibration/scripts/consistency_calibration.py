@@ -672,6 +672,63 @@ def run_magnitude_check(args):
         rospy.loginfo("Magnitude check complete.")
 
 
+def run_calibration_check(args):
+    """Run calibration path comparison: R_CORR-only vs full calibration"""
+    import json
+    from pathlib import Path
+    from sensor_array_config.base import get_config
+    from consistency_fit import (
+        compare_calibration_methods,
+        compute_sensor_gains,
+    )
+
+    # Data directory setup
+    data_dir = Path(__file__).parent.parent.parent / 'sensor_data_collection' / 'data'
+    magnitude_path = data_dir / 'magnitude.txt'
+
+    # Load sensor config and parameters
+    sensor_config = get_config(args.sensor_type)
+    intrinsic_params = sensor_config.intrinsic
+
+    # Build r_corr_dict
+    r_corr_dict = {}
+    for entry in sensor_config.hardware.R_CORR:
+        mat = np.array(entry.matrix).reshape(3, 3, order='F')
+        for sid in entry.sensor_ids:
+            r_corr_dict[sid] = mat
+
+    # Get or compute sensor_gains
+    if args.sensor_gains_json:
+        with open(args.sensor_gains_json) as f:
+            gains_raw = json.load(f)
+        sensor_gains = {
+            int(sid): {'s_i': data['s_i']}
+            for sid, data in gains_raw.items()
+        }
+        print(f"[INFO] Loaded sensor gains from {args.sensor_gains_json}")
+    else:
+        print("[INFO] Computing sensor gains internally...")
+        gains_result = compute_sensor_gains(
+            data_dir=data_dir,
+            magnitude_path=magnitude_path,
+            sensor_config=sensor_config,
+            intrinsic_params=intrinsic_params,
+        )
+        sensor_gains = {sid: {'s_i': gains_result[sid]['s_i']}
+                        for sid in gains_result}
+
+    # Execute comparison
+    result = compare_calibration_methods(
+        data_dir=data_dir,
+        magnitude_path=magnitude_path,
+        intrinsic_params=intrinsic_params,
+        r_corr_dict=r_corr_dict,
+        sensor_gains=sensor_gains,
+        sensor_config=sensor_config,
+    )
+    return result
+
+
 def main():
     """Main entry point with argument parsing."""
     import argparse
@@ -685,6 +742,10 @@ def main():
                         help='Voltage to check (default: 5)')
     parser.add_argument('--batch', action='store_true',
                         help='Run all channel/voltage combinations')
+    parser.add_argument('--calibration-check', action='store_true',
+                        help='Compare R_CORR-only vs full calibration using rowwise sensor std')
+    parser.add_argument('--sensor-gains-json', type=str, default=None,
+                        help='Path to sensor gains JSON (if not provided, compute internally)')
     parser.add_argument('--sensor-type', type=str, default='QMC6309',
                         help='Sensor type (default: QMC6309)')
     parser.add_argument('--skip-sampling', action='store_true', default=False,
@@ -705,6 +766,15 @@ def main():
             import traceback
             traceback.print_exc()
         return
+
+    if args.calibration_check:
+        try:
+            run_calibration_check(args)
+        except Exception as e:
+            print(f"Error: {e}")
+            import traceback
+            traceback.print_exc()
+        sys.exit(0)
 
     # Default behavior: run consistency calibration
     rospy.init_node('consistency_calibration', anonymous=True)
