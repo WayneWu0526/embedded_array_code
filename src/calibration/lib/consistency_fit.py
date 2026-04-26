@@ -1251,6 +1251,173 @@ def compute_rowwise_sensor_consistency_metric(
     }
 
 
+def compare_calibration_methods(
+    data_dir: Path,
+    magnitude_path: Path,
+    intrinsic_params: IntrinsicParamsSet,
+    r_corr_dict: Dict[int, np.ndarray],
+    sensor_gains: Dict[int, Dict],
+    sensor_config: SensorArrayConfig = None,
+    logger=None,
+) -> Dict:
+    """
+    对比两个校准路径的逐行传感器一致性指标
+
+    Path A (baseline): R_CORR × b_raw
+    Path B (full):     R_CORR × s_i × (C_i × (b_raw - o_i))
+
+    Args:
+        data_dir: .../sensor_data_collection/data 目录
+        magnitude_path: magnitude.txt 路径
+        intrinsic_params: 椭球参数 (o_i, C_i)
+        r_corr_dict: {sensor_id: (3,3)} R_CORR 矩阵字典
+        sensor_gains: {sensor_id: {'s_i': float}} 模值增益字典
+        sensor_config: 传感器配置
+        logger: 日志函数
+
+    Returns:
+        包含两个路径指标的完整对比结果字典
+    """
+    if logger is None:
+        def logger(*args, **kwargs):
+            print(*args, **kwargs)
+
+    if sensor_config is None:
+        sensor_config = get_config("QMC6309")
+    n_sensors = sensor_config.manifest.n_sensors
+
+    magnitude_data = parse_magnitude_txt(magnitude_path)
+    channels = list(magnitude_data.keys())
+
+    # 收集所有数据路径
+    all_raw_data = []  # list of (channel, voltage, data) tuples
+    for channel in channels:
+        for voltage in VOLTAGE_ORDER:
+            try:
+                raw_data = load_manual_calibration_data(
+                    data_dir, channel, voltage, n_sensors
+                )
+                all_raw_data.append((channel, voltage, raw_data))
+            except FileNotFoundError:
+                logger(f"[WARN] Missing: manual_{channel}/manual_record_{voltage}V.csv")
+                continue
+
+    # ---------- Path A: R_CORR × b_raw ----------
+    all_path_a_concat = []
+    # ---------- Path B: R_CORR × s_i × (C_i × (b_raw - o_i)) ----------
+    all_path_b_concat = []
+    # ---------- 按 channel 分组 ----------
+    per_channel_a = {ch: [] for ch in channels}
+    per_channel_b = {ch: [] for ch in channels}
+    # ---------- 按 voltage 分组 ----------
+    per_voltage_a = {v: [] for v in VOLTAGE_ORDER}
+    per_voltage_b = {v: [] for v in VOLTAGE_ORDER}
+
+    for channel, voltage, b_raw in all_raw_data:
+        # Path A
+        b_a = np.zeros_like(b_raw)
+        for sid in range(1, n_sensors + 1):
+            b_a[:, sid-1, :] = apply_r_corr_rotation(b_raw[:, sid-1, :], r_corr_dict[sid])
+
+        # Path B
+        b_b = np.zeros_like(b_raw)
+        for sid in range(1, n_sensors + 1):
+            o_i = np.array(intrinsic_params.params[sid].o_i)
+            C_i = np.array(intrinsic_params.params[sid].C_i)
+            s_i = sensor_gains[sid]['s_i']
+            b_ellipsoid = apply_ellipsoid_correction_to_data(b_raw[:, sid-1, :], o_i, C_i)
+            b_with_gain = s_i * b_ellipsoid
+            b_b[:, sid-1, :] = apply_r_corr_rotation(b_with_gain, r_corr_dict[sid])
+
+        # 收集用于全局指标
+        all_path_a_concat.append(b_a)
+        all_path_b_concat.append(b_b)
+        per_channel_a[channel].append(b_a)
+        per_channel_b[channel].append(b_b)
+        per_voltage_a[voltage].append(b_a)
+        per_voltage_b[voltage].append(b_b)
+
+    # 合并所有数据
+    all_path_a = np.concatenate(all_path_a_concat, axis=0)  # (N_total, 12, 3)
+    all_path_b = np.concatenate(all_path_b_concat, axis=0)
+
+    # 计算全局指标
+    metric_a = compute_rowwise_sensor_consistency_metric(all_path_a)
+    metric_b = compute_rowwise_sensor_consistency_metric(all_path_b)
+
+    # 计算 per-channel 指标
+    per_channel_results = {}
+    for ch in channels:
+        if per_channel_a[ch]:
+            ca = np.concatenate(per_channel_a[ch], axis=0)
+            cb = np.concatenate(per_channel_b[ch], axis=0)
+            per_channel_results[ch] = {
+                'path_a': compute_rowwise_sensor_consistency_metric(ca),
+                'path_b': compute_rowwise_sensor_consistency_metric(cb),
+            }
+
+    # 计算 per-voltage 指标
+    per_voltage_results = {}
+    for v in VOLTAGE_ORDER:
+        if per_voltage_a[v]:
+            va = np.concatenate(per_voltage_a[v], axis=0)
+            vb = np.concatenate(per_voltage_b[v], axis=0)
+            per_voltage_results[v] = {
+                'path_a': compute_rowwise_sensor_consistency_metric(va),
+                'path_b': compute_rowwise_sensor_consistency_metric(vb),
+            }
+
+    result = {
+        'path_a': {
+            'method': 'R_CORR × b_raw',
+            'metric': metric_a,
+        },
+        'path_b': {
+            'method': 'R_CORR × s_i × (C_i × (b_raw - o_i))',
+            'metric': metric_b,
+        },
+        'per_channel_results': per_channel_results,
+        'per_voltage_results': per_voltage_results,
+        'total_samples': all_path_a.shape[0],
+    }
+
+    # 打印摘要
+    logger("\n" + "=" * 60)
+    logger("Calibration Comparison Summary")
+    logger("=" * 60)
+    logger(f"  Total samples: {all_path_a.shape[0]}")
+    logger("")
+    logger(f"  {'Metric':<25} {'Path A (R_CORR)':>18} {'Path B (Full)':>18} {'Improvement':>12}")
+    logger(f"  {'-' * 75}")
+
+    for key in ['grand_mean_std', 'grand_max_std', 'percentile_95_std']:
+        va = metric_a[key]
+        vb = metric_b[key]
+        imp = (va - vb) / (va + 1e-10) * 100
+        logger(f"  {key:<25} {va:>18.6f} {vb:>18.6f} {imp:>+11.1f}%")
+
+    logger(f"  {'-' * 75}")
+    logger("  Per-channel:")
+    for ch in channels:
+        if ch in per_channel_results:
+            ma = per_channel_results[ch]['path_a']['grand_mean_std']
+            mb = per_channel_results[ch]['path_b']['grand_mean_std']
+            imp = (ma - mb) / (ma + 1e-10) * 100
+            logger(f"    {ch.upper()}: mean_std A={ma:.4f}, B={mb:.4f}, imp={imp:+.1f}%")
+
+    logger("  Per-voltage:")
+    for v in VOLTAGE_ORDER:
+        if v in per_voltage_results:
+            ma = per_voltage_results[v]['path_a']['grand_mean_std']
+            mb = per_voltage_results[v]['path_b']['grand_mean_std']
+            imp = (ma - mb) / (ma + 1e-10) * 100
+            logger(f"    {v}V: mean_std A={ma:.4f}, B={mb:.4f}, imp={imp:+.1f}%")
+
+    logger("=" * 60)
+
+    return result
+
+
 def main():
     import argparse
 
