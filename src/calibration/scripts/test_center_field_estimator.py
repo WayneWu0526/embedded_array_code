@@ -46,9 +46,32 @@ def test_batch():
     assert np.all(np.isfinite(b_hats))
     print(f"test_batch PASSED: {b_hats.shape}")
 
+def test_real_data():
+    """Verify with actual manual_record_5V.csv data."""
+    import pandas as pd
+
+    csv_path = Path(__file__).resolve().parent.parent.parent / 'sensor_data_collection/data/manual_x/manual_record_5V.csv'
+    df = pd.read_csv(csv_path)
+    b_raw = df.values[:100]  # first 100 rows
+
+    estimator = CenterFieldEstimator()
+    b_hats = estimator.estimate_batch(b_raw)
+
+    print(f"Input shape: {b_raw.shape}")
+    print(f"Output shape: {b_hats.shape}")
+    print(f"b_hat stats: mean={np.mean(b_hats, axis=0)}, std={np.std(b_hats, axis=0)}")
+    print(f"b_hat magnitude: mean={np.mean(np.linalg.norm(b_hats, axis=1)):.2f}")
+
+    # Sanity: magnitude should be in reasonable range (10-100 µT)
+    mags = np.linalg.norm(b_hats, axis=1)
+    assert np.all(mags > 1.0), f"Magnitude too small: {mags.min()}"
+    assert np.all(mags < 200.0), f"Magnitude too large: {mags.max()}"
+    print("test_real_data PASSED")
+
 if __name__ == "__main__":
     test_estimator_init()
     test_estimator_basic()
     test_r_corr_shape()
     test_estimate_known_row()
     test_batch()
+    test_real_data()
