@@ -23,13 +23,47 @@ def null(A: np.ndarray, rcond: float = 1e-10) -> np.ndarray:
 class CenterFieldEstimator:
     """Estimates local center magnetic field from sensor array measurements."""
 
-    def __init__(self, sensor_config=None):
+    def __init__(self, sensor_config=None, sensor_ids=None):
         if sensor_config is None:
             sensor_config = get_config("QMC6309")
         self.sensor_config = sensor_config
-        self.d_list = np.array(sensor_config.hardware.d_list)  # (12, 3)
+        self.full_d_list = np.array(sensor_config.hardware.d_list)  # (12, 3)
+
+        # Default: all 12 sensors
+        if sensor_ids is None:
+            sensor_ids = list(range(1, 13))
+
+        # Validate sensor_ids
+        self._validate_sensor_ids(sensor_ids)
+
+        # Filter d_list to selected sensors
+        self.sensor_ids = sensor_ids
+        indices = [sid - 1 for sid in sensor_ids]
+        self.d_list = self.full_d_list[indices, :]  # (N_selected, 3)
+
         self._load_r_corr()
         self._precompute_weight_vector()
+
+    def _validate_sensor_ids(self, sensor_ids):
+        """Validate sensor_ids list."""
+        if not isinstance(sensor_ids, (list, tuple)):
+            raise ValueError(f"sensor_ids must be a list or tuple of integers, got {type(sensor_ids).__name__}")
+
+        if len(sensor_ids) == 0:
+            raise ValueError(f"sensor_ids must have at least 3 sensors, got 0")
+
+        if len(sensor_ids) < 3:
+            raise ValueError(f"sensor_ids must have at least 3 sensors, got {len(sensor_ids)}")
+
+        seen = set()
+        for sid in sensor_ids:
+            if not isinstance(sid, int):
+                raise ValueError(f"sensor_ids must be integers in 1-12, got {type(sid).__name__}")
+            if sid < 1 or sid > 12:
+                raise ValueError(f"Sensor ID {sid} not found. Available: 1-12")
+            if sid in seen:
+                raise ValueError(f"Duplicate sensor IDs: {sensor_ids}")
+            seen.add(sid)
 
     def _load_r_corr(self):
         """Load R_CORR matrices from sensor config into dict sensor_id -> np.array(3,3)."""
@@ -37,51 +71,62 @@ class CenterFieldEstimator:
         for entry in self.sensor_config.hardware.R_CORR:
             mat = np.array(entry.matrix).reshape(3, 3, order='F')
             for sid in entry.sensor_ids:
-                self.R_CORR[sid] = mat
+                if sid in self.sensor_ids:
+                    self.R_CORR[sid] = mat
 
     def _precompute_weight_vector(self):
         """Precompute w from d_list null space. Called once on init."""
-        D_cal = self.d_list.T  # (3, 12)
+        N = len(self.sensor_ids)
+        D_cal = self.d_list.T  # (3, N)
         Q = null(D_cal)
-        ones_N = np.ones((12, 1))
+        ones_N = np.ones((N, 1))
         g = Q.T @ ones_N
         g_norm_sq = float(g.T @ g)
         if g_norm_sq < 1e-10:
-            raise ValueError("Cannot construct w: 1 has zero projection onto null(D_cal)")
-        self.w = (Q @ g) / g_norm_sq  # (12, 1)
+            # Fallback for N=3 case (zero null space): use uniform weights
+            if N == 3:
+                self.w = ones_N / N  # uniform weights [1/3, 1/3, 1/3]
+            else:
+                raise ValueError(
+                    f"Cannot construct w: 1 has zero projection onto null(D_cal) "
+                    f"(N={N}, null_space_dim={Q.shape[1]})"
+                )
+        else:
+            self.w = (Q @ g) / g_norm_sq  # (N, 1)
 
     def apply_r_corr(self, b_raw):
         """Apply R_CORR to raw sensor data.
 
         Args:
-            b_raw: (N, 3) or (N*3,) raw sensor readings
+            b_raw: (N, 3) or (N*3,) raw sensor readings for selected sensors
 
         Returns:
             b_rcorr: (N, 3) with R_CORR applied per sensor
         """
+        N = len(self.sensor_ids)
         if b_raw.ndim == 1:
-            b_raw = b_raw.reshape(12, 3)
+            b_raw = b_raw.reshape(N, 3)
         b_rcorr = np.zeros_like(b_raw)
-        for sid in range(1, 13):
-            sensor_idx = sid - 1
+        for i, sid in enumerate(self.sensor_ids):
             if sid in self.R_CORR:
-                b_rcorr[sensor_idx] = self.R_CORR[sid] @ b_raw[sensor_idx]
+                b_rcorr[i] = self.R_CORR[sid] @ b_raw[i]
             else:
-                b_rcorr[sensor_idx] = b_raw[sensor_idx]
+                b_rcorr[i] = b_raw[i]
         return b_rcorr
 
     def estimate_from_row(self, b_raw_row):
         """Estimate center field for a single row.
 
         Args:
-            b_raw_row: (36,) or (12, 3) raw sensor data
+            b_raw_row: (N*3,) or (N, 3) raw sensor data for selected sensors
 
         Returns:
             b_hat: (3,) center field estimate
         """
+        N = len(self.sensor_ids)
         b_rcorr = self.apply_r_corr(b_raw_row)
-        if b_rcorr.ndim == 2 and b_rcorr.shape[0] == 12:
-            B_meas = b_rcorr.T  # (3, 12)
+        if b_rcorr.ndim == 2 and b_rcorr.shape[0] == N:
+            B_meas = b_rcorr.T  # (3, N)
         else:
             raise ValueError(f"Unexpected shape after R_CORR: {b_rcorr.shape}")
         b_hat = B_meas @ self.w  # (3, 1) -> (3,)
