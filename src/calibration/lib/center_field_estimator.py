@@ -118,19 +118,37 @@ class CenterFieldEstimator:
         """Estimate center field for a single row.
 
         Args:
-            b_raw_row: (N*3,) or (N, 3) raw sensor data for selected sensors
+            b_raw_row: (36,) or (12, 3) raw sensor data for ALL 12 sensors.
+                        Only sensors in self.sensor_ids are used.
 
         Returns:
             b_hat: (3,) center field estimate
         """
-        N = len(self.sensor_ids)
-        b_rcorr = self.apply_r_corr(b_raw_row)
-        if b_rcorr.ndim == 2 and b_rcorr.shape[0] == N:
-            B_meas = b_rcorr.T  # (3, N)
+        N_selected = len(self.sensor_ids)
+        # Filter to selected sensor columns from full 12-sensor data
+        b_raw_filtered = self._filter_to_selected_sensors(b_raw_row)
+        b_rcorr = self.apply_r_corr(b_raw_filtered)
+        if b_rcorr.ndim == 2 and b_rcorr.shape[0] == N_selected:
+            B_meas = b_rcorr.T  # (3, N_selected)
         else:
             raise ValueError(f"Unexpected shape after R_CORR: {b_rcorr.shape}")
         b_hat = B_meas @ self.w  # (3, 1) -> (3,)
         return b_hat.ravel()
+
+    def _filter_to_selected_sensors(self, b_raw):
+        """Filter raw data to only include selected sensor columns.
+
+        Args:
+            b_raw: (36,) or (12, 3) raw data for all 12 sensors
+
+        Returns:
+            (N_selected, 3) raw data for selected sensors only
+        """
+        if b_raw.ndim == 1:
+            b_raw = b_raw.reshape(12, 3)
+        # self.sensor_ids is 1-indexed, convert to 0-indexed
+        indices = [sid - 1 for sid in self.sensor_ids]
+        return b_raw[indices]  # (N_selected, 3)
 
     def estimate_batch(self, b_raw):
         """Estimate center field for multiple rows.
