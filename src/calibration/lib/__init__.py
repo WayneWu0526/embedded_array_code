@@ -26,6 +26,7 @@ from .consistency_fit import (
     FieldCondition,
     ConsistencyResult,
 )
+from .center_field_estimator import CenterFieldEstimator
 
 __all__ = [
     # Main fitting API
@@ -49,4 +50,7 @@ __all__ = [
     # Data classes
     'FieldCondition',
     'ConsistencyResult',
+
+    # Center field estimator
+    'CenterFieldEstimator',
 ]
