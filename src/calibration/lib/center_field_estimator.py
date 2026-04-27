@@ -86,3 +86,21 @@ class CenterFieldEstimator:
             raise ValueError(f"Unexpected shape after R_CORR: {b_rcorr.shape}")
         b_hat = B_meas @ self.w  # (3, 1) -> (3,)
         return b_hat.ravel()
+
+    def estimate_batch(self, b_raw):
+        """Estimate center field for multiple rows.
+
+        Args:
+            b_raw: (N, 36) or (N, 12, 3) raw sensor data
+
+        Returns:
+            b_hats: (N, 3) center field estimates
+        """
+        if b_raw.ndim == 2 and b_raw.shape[1] == 36:
+            b_raw = b_raw.reshape(b_raw.shape[0], 12, 3)
+
+        N = b_raw.shape[0]
+        b_hats = np.zeros((N, 3))
+        for i in range(N):
+            b_hats[i] = self.estimate_from_row(b_raw[i])
+        return b_hats

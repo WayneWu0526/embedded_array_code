@@ -37,8 +37,18 @@ def test_estimate_known_row():
     assert np.all(np.isfinite(b_hat))
     print("test_estimate_known_row PASSED")
 
+def test_batch():
+    """Test estimate_batch processes multiple rows."""
+    estimator = CenterFieldEstimator()
+    b_raw = np.random.randn(5, 36)  # 5 rows
+    b_hats = estimator.estimate_batch(b_raw)
+    assert b_hats.shape == (5, 3)
+    assert np.all(np.isfinite(b_hats))
+    print(f"test_batch PASSED: {b_hats.shape}")
+
 if __name__ == "__main__":
     test_estimator_init()
     test_estimator_basic()
     test_r_corr_shape()
     test_estimate_known_row()
+    test_batch()
