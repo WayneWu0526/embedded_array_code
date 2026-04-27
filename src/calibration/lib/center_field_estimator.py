@@ -50,6 +50,39 @@ class CenterFieldEstimator:
             raise ValueError("Cannot construct w: 1 has zero projection onto null(D_cal)")
         self.w = (Q @ g) / g_norm_sq  # (12, 1)
 
+    def apply_r_corr(self, b_raw):
+        """Apply R_CORR to raw sensor data.
+
+        Args:
+            b_raw: (N, 3) or (N*3,) raw sensor readings
+
+        Returns:
+            b_rcorr: (N, 3) with R_CORR applied per sensor
+        """
+        if b_raw.ndim == 1:
+            b_raw = b_raw.reshape(12, 3)
+        b_rcorr = np.zeros_like(b_raw)
+        for sid in range(1, 13):
+            sensor_idx = sid - 1
+            if sid in self.R_CORR:
+                b_rcorr[sensor_idx] = self.R_CORR[sid] @ b_raw[sensor_idx]
+            else:
+                b_rcorr[sensor_idx] = b_raw[sensor_idx]
+        return b_rcorr
+
     def estimate_from_row(self, b_raw_row):
-        """Estimate center field for a single row."""
-        raise NotImplementedError
+        """Estimate center field for a single row.
+
+        Args:
+            b_raw_row: (36,) or (12, 3) raw sensor data
+
+        Returns:
+            b_hat: (3,) center field estimate
+        """
+        b_rcorr = self.apply_r_corr(b_raw_row)
+        if b_rcorr.ndim == 2 and b_rcorr.shape[0] == 12:
+            B_meas = b_rcorr.T  # (3, 12)
+        else:
+            raise ValueError(f"Unexpected shape after R_CORR: {b_rcorr.shape}")
+        b_hat = B_meas @ self.w  # (3, 1) -> (3,)
+        return b_hat.ravel()

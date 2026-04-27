@@ -20,6 +20,25 @@ def test_estimator_basic():
     assert b_hat.shape == (3,)
     print("test_estimator_basic PASSED")
 
+def test_r_corr_shape():
+    """Test apply_r_corr preserves shape."""
+    estimator = CenterFieldEstimator()
+    b_raw = np.random.randn(12, 3)
+    b_rcorr = estimator.apply_r_corr(b_raw)
+    assert b_rcorr.shape == (12, 3)
+    print("test_r_corr_shape PASSED")
+
+def test_estimate_known_row():
+    """Test estimate_from_row returns finite values."""
+    estimator = CenterFieldEstimator()
+    b_raw = np.random.randn(36)
+    b_hat = estimator.estimate_from_row(b_raw)
+    assert b_hat.shape == (3,)
+    assert np.all(np.isfinite(b_hat))
+    print("test_estimate_known_row PASSED")
+
 if __name__ == "__main__":
     test_estimator_init()
     test_estimator_basic()
+    test_r_corr_shape()
+    test_estimate_known_row()
