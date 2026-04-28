@@ -59,11 +59,11 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
     tol = 1e-10
 
     # Null-space basis of D_cal
-    Q_bar = null(D_cal)  # shape: (N, N-r)
+    Q = null(D_cal)  # shape: (N, N-r)
 
     # Construct weight vector w for local field estimation:
     #   D_cal @ w = 0,   1^T w = 1
-    if Q_bar.size == 0:
+    if Q.size == 0:
         # Only valid fallback when the array is centered: D_cal @ 1 = 0
         if np.linalg.norm(D_cal @ ones_N) < tol:
             w = ones_N / N
@@ -73,14 +73,14 @@ def MaPS_Estimator(D_cal: np.ndarray, sources: list, B_meas_cell: list):
                 "null(D_cal) is empty and the array is not centered."
             )
     else:
-        g = Q_bar.T @ ones_N                      # shape: (N-r, 1)
+        g = Q.T @ ones_N                      # shape: (N-r, 1)
         g_norm_sq = float(g.T @ g)
         if g_norm_sq < tol:
             raise ValueError(
                 "Invalid sensor geometry: 1 has zero projection onto null(D_cal), "
                 "so the local field estimator is not identifiable."
             )
-        w = (Q_bar @ g) / g_norm_sq              # shape: (N, 1)
+        w = (Q @ g) / g_norm_sq              # shape: (N, 1)
 
     # Generalized centering matrix: Pw = I - w 1^T
     Pw = np.eye(N) - w @ ones_N.T                # shape: (N, N)

@@ -55,8 +55,6 @@ def solve_per_sensor(b_corr_all, b_ref_all):
             b_r = b_ref_i[n]    # (3,)
             for k in range(3):
                 row = n * 3 + k
-                # D structure: D[0,:] multiplies b_corr[0], etc.
-                # b_ref[k] = D[k,0]*b_c[0] + D[k,1]*b_c[1] + D[k,2]*b_c[2] + e[k]
                 A[row, 0:3] = b_c[0] * np.eye(3)[k]
                 A[row, 3:6] = b_c[1] * np.eye(3)[k]
                 A[row, 6:9] = b_c[2] * np.eye(3)[k]
@@ -86,10 +84,11 @@ def solve_per_sensor(b_corr_all, b_ref_all):
 
 def evaluate_per_file(results, base_dir, channels, voltages, est):
     """Evaluate calibration quality per file."""
+    cleaned_dir = Path(base_dir) / 'cleaned_aggressive'
+
     for ch in channels:
-        ch_dir = Path(base_dir) / ch
         for v in voltages:
-            csv_path = ch_dir / f'manual_record_{v}V.csv'
+            csv_path = cleaned_dir / f'{ch}_{v}V_cleaned.csv'
             if not csv_path.exists():
                 continue
             df = pd.read_csv(csv_path)
@@ -138,8 +137,7 @@ def main():
             b_raw, b_ref = process_channel_voltage(csv_path)
             all_b_raw.append(b_raw)
             all_b_ref.append(b_ref)
-            avg_mag = np.linalg.norm(b_ref, axis=1).mean()
-            print(f"  {ch}/{v}V: {b_raw.shape[0]} rows, avg_mag = {avg_mag:.6f}")
+            print(f"  {ch}/{v}V: {b_raw.shape[0]} rows")
 
     # Step 2: Concatenate
     print("\nStep 2: Concatenating data...")
@@ -162,7 +160,7 @@ def main():
     print("\nStep 4: Solving D*b_corr + e = b_ref for each sensor...")
     results = solve_per_sensor(b_corr_all, b_ref_all)
 
-    # Save to JSON (convert int keys to str for JSON compatibility)
+    # Save to JSON
     output_path = Path(base_dir) / 'calibration_results_aggressive.json'
     with open(output_path, 'w') as f:
         json.dump({str(k): v for k, v in results.items()}, f, indent=2)
