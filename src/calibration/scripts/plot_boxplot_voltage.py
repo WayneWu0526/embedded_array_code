@@ -23,12 +23,12 @@ plt.rcParams.update({
     "text.latex.preamble": r"\usepackage{amsmath,amsfonts,amssymb,amsthm,mathrsfs,mathtools}\usepackage{bm}\usepackage{dutchcal}",
     "font.family": "serif",
     "font.serif": ["Computer Modern Roman", "Times New Roman"],
-    "font.size": 11,
-    "axes.labelsize": 11,
-    "axes.titlesize": 11,
-    "xtick.labelsize": 11,
-    "ytick.labelsize": 11,
-    "legend.fontsize": 8,
+    "font.size": 16,
+    "axes.labelsize": 16,
+    "axes.titlesize": 16,
+    "xtick.labelsize": 16,
+    "ytick.labelsize": 16,
+    "legend.fontsize": 16,
 })
 
 calib_root = Path(__file__).parent.parent.parent
@@ -103,7 +103,7 @@ def main():
                 all_fro_cal[volt].append(np.linalg.norm(compute_pseudo_gradient(b_corr_n.T, P_mat, C_pinv, S_mat), 'fro'))
 
     # Plot
-    fig, axes = plt.subplots(1, 2, figsize=(8.9, 3.5))
+    fig, axes = plt.subplots(1, 2, figsize=(19.8 / 2.54, 8 / 2.54))
 
     def draw_grouped(ax, raw_dict, cal_dict, title, ylabel):
         pos = 1
@@ -124,14 +124,14 @@ def main():
         ax.set_ylabel(ylabel)
         # ax.set_yscale('log')
         ax.grid(True, which='both', alpha=0.3)
-        ax.legend([h_raw, h_cal], [r"Raw Data", r"Calibrated Data"], loc='upper left')
+        ax.legend([h_raw, h_cal], [r"Raw", r"Cal."], loc='upper left', fontsize=12)
 
     draw_grouped(axes[0], all_err_raw, all_err_cal, r"Sensor-to-Reference Error", r"$e_{\bm{\mathcal{b}}}$ [Gs]")
     draw_grouped(axes[1], all_fro_raw, all_fro_cal, r"Pseudo-gradient Frobenius Norm", r"$\|\delta{\hat{\bm{X}}}\|_F \text{ [Gs/m]}$")
 
-    plt.tight_layout()
-    out_path = calib_root / 'calibration' / 'plots' / 'boxplot_voltage_combined.png'
-    plt.savefig(out_path, dpi=200)
+    plt.tight_layout(pad=0.5)
+    out_path = calib_root / 'calibration' / 'plots' / 'boxplot_voltage_combined.pdf'
+    plt.savefig(out_path, dpi=300)
     print(f"Final plot saved to {out_path}")
 
 if __name__ == '__main__':

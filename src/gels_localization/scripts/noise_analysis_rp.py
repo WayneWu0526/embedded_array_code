@@ -38,8 +38,8 @@ from mag_dipole_model import mag_dipole_model
 # Fixed noise level (Gs)
 FIXED_NOISE_LEVEL = 0.01
 
-# Offset sweep: 0 to 1 with step 0.05
-OFFSET_LEVELS = [round(x * 0.05, 2) for x in range(21)]  # 0.0, 0.05, ..., 1.0
+# Offset sweep: 0 to 0.5 with step 0.05
+OFFSET_LEVELS = [round(x * 0.05, 2) for x in range(11)]  # 0.0, 0.05, ..., 0.5
 
 
 def sample_random_rotation():
@@ -268,8 +268,8 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     all_pos_err = np.array(all_pos_err, dtype=float)
     all_ori_err = np.array(all_ori_err, dtype=float)
 
-    # Filter valid (finite, non-nan, positive ratio, positive error) points
-    valid_ratio = np.isfinite(all_ratio) & (all_ratio > 0)
+    # Filter valid (finite, non-nan, non-negative ratio, positive error) points
+    valid_ratio = np.isfinite(all_ratio) & (all_ratio >= 0)
     valid_pos = valid_ratio & np.isfinite(all_pos_err) & (all_pos_err > 0)
     valid_ori = valid_ratio & np.isfinite(all_ori_err) & (all_ori_err > 0)
 
@@ -283,53 +283,108 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     coeffs_pos = np.polyfit(ratio_v_pos, pos_v, 1)
     k_pos, b_pos = coeffs_pos[0], coeffs_pos[1]
 
-    coeffs_ori = np.polyfit(ratio_v_ori, ori_v, 1)
-    k_ori, b_ori = coeffs_ori[0], coeffs_ori[1]
+    # For orientation: force line through the minimum point (ratio_min, e_R_min)
+    # then fit slope k using remaining data
+    idx_min_ori = np.argmin(ori_v)
+    ratio_min_ori = ratio_v_ori[idx_min_ori]
+    e_R_min = ori_v[idx_min_ori]
+    mask_remaining = np.ones(len(ratio_v_ori), dtype=bool)
+    mask_remaining[idx_min_ori] = False
+    k_ori = np.polyfit(ratio_v_ori[mask_remaining], ori_v[mask_remaining] - e_R_min, 1)[0]
+    b_ori = e_R_min - k_ori * ratio_min_ori
 
+    fontsize = 16
     # Plot
-    fig, axes = plt.subplots(1, 2, figsize=(17.8 / 2.54, 8.0 / 2.54))
-
     plt.rcParams.update({
-        'text.usetex': False,
-        'font.family': 'serif',
-        'mathtext.fontset': 'cm',
-        'font.size': 16,
+        "text.usetex": True,
+        "text.latex.preamble": r"\usepackage{amsmath,amsfonts,amssymb,amsthm,mathrsfs,mathtools}\usepackage{bm}\usepackage{dutchcal}",
+        "font.family": "serif",
+        "font.serif": ["Computer Modern Roman"],
+        "font.size": fontsize,
+        "axes.labelsize": fontsize,
+        "axes.titlesize": fontsize,
+        "xtick.labelsize": fontsize,
+        "ytick.labelsize": fontsize,
     })
 
-    from matplotlib.ticker import LogLocator, FuncFormatter
+    fig, axes = plt.subplots(1, 2, figsize=(19.8 / 2.54, 8 / 2.54))
+
+    from matplotlib.ticker import ScalarFormatter
+
+    for ax in axes:
+        ax.xaxis.set_major_formatter(ScalarFormatter(useMathText=True))
+        ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=True))
 
     # ---- Position error subplot ----
     ax = axes[0]
-    ax.scatter(ratio_v_pos, pos_v, alpha=0.3, s=10, color='steelblue', label='Samples')
+    ax.scatter(ratio_v_pos, pos_v, alpha=0.3, s=10, color='black', edgecolors='none')
 
-    # Linear fit line
-    ratio_fit_pos = np.linspace(ratio_v_pos.min(), ratio_v_pos.max(), 200)
+    # Linear fit line - start from actual min ratio (no extrapolation to 0)
+    ratio_fit_pos = np.linspace(ratio_v_pos.min(), ratio_v_pos.max() * 1.05, 200)
     pos_fit = k_pos * ratio_fit_pos + b_pos
-    ax.plot(ratio_fit_pos, pos_fit, 'r-', linewidth=1.5,
-            label=f'Fit: $k={k_pos:.2f}$, $b={b_pos:.2f}$')
+    ln_fit, = ax.plot(ratio_fit_pos, pos_fit, 'k-', linewidth=1.5)
 
-    ax.set_xlabel(r'$\Delta_o / |\mathbf{B}|$', fontsize=16)
-    ax.set_ylabel(r'$\mathrm{Position\ Error}$ $\mathrm{[mm]}$', fontsize=16)
-    ax.grid(True, alpha=0.3, which='both')
-    ax.legend(fontsize=11, loc='upper left')
-    ax.tick_params(labelsize=14)
+    # Add vertical and horizontal lines for key delta_o levels
+    key_ratios = [0.0, 0.00597, 0.03845]
+    colors = ['#2ca02c', '#d62728', '#1f77b4']  # Green (Ideal), Red (Calibrated), Blue (Uncalibrated)
+    labels = ['Ideal', 'Cal.', 'Raw']
+
+    key_handles = []
+    for r, c, l in zip(key_ratios, colors, labels):
+        err_val = k_pos * r + b_pos
+        ax.vlines(x=r, ymin=-150, ymax=err_val, color=c, linestyle='-', linewidth=1.5)
+        ax.hlines(y=err_val, xmin=-1, xmax=r, color=c, linestyle='-', linewidth=1.5)
+        ln, = ax.plot([], [], color=c, linewidth=1.5, label=l)
+        key_handles.append(ln)
+
+    # Force LaTeX rendering for ticks
+    ax.xaxis.set_major_formatter(plt.FormatStrFormatter('$%g$'))
+    ax.yaxis.set_major_formatter(plt.FormatStrFormatter('$%g$'))
+
+    ax.set_xlim(left=-0.0133, right=0.08)
+    ax.set_ylim(bottom=-30, top=180)
+
+    ax.set_xlabel(r'$\Delta o / \|\bar{\bm{\mathcal{b}}}\|$')
+    ax.set_ylabel(r'$e_{\bm{p}}\ \mathrm{[mm]}$')
+    ax.grid(True, alpha=0.2, linestyle=':')
+    # Legend order: Fit, Samples, Ideal, Cal., Raw
+    ln_samples, = ax.plot([], [], color='black', linewidth=0, marker='o', markersize=4, label='Samples')
+    ax.legend([ln_fit, ln_samples] + key_handles,
+              ['Fit', 'Samples', 'Ideal', 'Cal.', 'Raw'],
+              fontsize=12, loc='lower right')
 
     print(f"Position linear fit: error = {k_pos:.4f} * (Δ_o/|B|) + {b_pos:.4f}")
 
     # ---- Orientation error subplot ----
     ax = axes[1]
-    ax.scatter(ratio_v_ori, ori_v, alpha=0.3, s=10, color='darkorange', label='Samples')
+    ax.scatter(ratio_v_ori, ori_v, alpha=0.3, s=10, color='black', edgecolors='none')
 
-    ratio_fit_ori = np.linspace(ratio_v_ori.min(), ratio_v_ori.max(), 200)
+    ratio_fit_ori = np.linspace(ratio_v_ori.min(), ratio_v_ori.max() * 1.05, 200)
     ori_fit = k_ori * ratio_fit_ori + b_ori
-    ax.plot(ratio_fit_ori, ori_fit, 'r-', linewidth=1.5,
-            label=f'Fit: $k={k_ori:.2f}$, $b={b_ori:.2f}$')
+    ln_fit_ori, = ax.plot(ratio_fit_ori, ori_fit, 'k-', linewidth=1.5)
 
-    ax.set_xlabel(r'$\Delta_o / |\mathbf{B}|$', fontsize=16)
-    ax.set_ylabel(r'$\mathrm{Orientation\ Error}$ $[^{\circ}]$', fontsize=16)
-    ax.grid(True, alpha=0.3, which='both')
-    ax.legend(fontsize=11, loc='upper left')
-    ax.tick_params(labelsize=14)
+    ori_handles = []
+    for r, c, l in zip(key_ratios, colors, labels):
+        err_val = k_ori * r + b_ori
+        ax.vlines(x=r, ymin=-150, ymax=err_val, color=c, linestyle='-', linewidth=1.5, alpha=0.8)
+        ax.hlines(y=err_val, xmin=-1, xmax=r, color=c, linestyle='-', linewidth=1.5, alpha=0.8)
+        ln, = ax.plot([], [], color=c, linewidth=1.5, label=l)
+        ori_handles.append(ln)
+
+    # Force LaTeX rendering for ticks
+    ax.xaxis.set_major_formatter(plt.FormatStrFormatter('$%g$'))
+    ax.yaxis.set_major_formatter(plt.FormatStrFormatter('$%g$'))
+
+    ax.set_xlim(left=-0.0077, right=0.07)
+    ax.set_ylim(bottom=-20, top=180)
+
+    ax.set_xlabel(r'$\Delta o / \|\bar{\bm{\mathcal{b}}}\|$')
+    ax.set_ylabel(r'$e_{\bm{R}}\ \mathrm{[^\circ]}$')
+    ax.grid(True, alpha=0.2, linestyle=':')
+    ln_samples_ori, = ax.plot([], [], color='black', linewidth=0, marker='o', markersize=4, label='Samples')
+    ax.legend([ln_fit_ori, ln_samples_ori] + ori_handles,
+              ['Fit', 'Samples', 'Ideal', 'Cal.', 'Raw'],
+              fontsize=12, loc='upper left')
 
     print(f"Orientation linear fit: error = {k_ori:.4f} * (Δ_o/|B|) + {b_ori:.4f}")
 
@@ -339,9 +394,9 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     if out_path is None:
         out_path = os.path.join(
             os.path.dirname(os.path.abspath(json_path)),
-            'noise_analysis_rp_snr.png'
+            'noise_analysis_rp_snr.pdf'
         )
-    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.savefig(out_path, dpi=300)
     print(f"\nPlot saved to: {out_path}")
     plt.close()
 
@@ -382,9 +437,9 @@ def main():
     if args.sensors is not None:
         sensor_ids = [int(x.strip()) for x in args.sensors.split(',')]
 
-    # Sweep magnitudes [50, 250, 500], single fixed pose (num_samples=1)
-    magnitudes = [50.0, 250.0, 500.0]
-    num_samples_fixed = 1
+    # Fixed magnitude = 50 A·m², single fixed pose (num_samples=1)
+    magnitudes = [50.0]
+    num_samples_fixed = 20
 
     run_multi_magnitude_analysis(
         json_path,
