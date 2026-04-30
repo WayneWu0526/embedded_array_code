@@ -26,11 +26,11 @@ plt.rcParams.update({
     "text.latex.preamble": r"\usepackage{amsmath,amsfonts,amssymb,amsthm,mathrsfs,mathtools}\usepackage{bm}\usepackage{dutchcal}",
     "font.family": "serif",
     "font.serif": ["Computer Modern Roman"],
-    "font.size": 8,
-    "axes.labelsize": 8,
-    "axes.titlesize": 8,
-    "xtick.labelsize": 8,
-    "ytick.labelsize": 8,
+    "font.size": 10,
+    "axes.labelsize": 10,
+    "axes.titlesize": 10,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
 })
 
 sys.path.insert(0, '/home/zhang/embedded_array_ws/src')
@@ -103,11 +103,12 @@ def main():
     # Collect stats for CSV
     stats_rows = []
 
-    fig, axes = plt.subplots(3, 5, figsize=(7.8, 12 / 2.54),
-                            gridspec_kw={'top': 0.92, 'bottom': 0.1,
+    fig, axes = plt.subplots(3, 5, figsize=(8.9 / 2.54, 6 / 2.54),
+                            gridspec_kw={'top': 0.88, 'bottom': 0.1,
                                          'left': 0.12, 'right': 0.98})
     row_labels = ['Channel X', 'Channel Y', 'Channel Z']
     col_labels = ['5', '10', '15', '20', '25']
+    col_labels_mag = {}  # voltage -> list of mean_mags for tracking
 
     for row_idx, ch in enumerate(channels):
         for col_idx, v in enumerate(voltages):
@@ -135,6 +136,13 @@ def main():
                 'post_std': np.std(delta_post),
             })
 
+            # Track mean_mag per voltage (average across channels)
+            b_ref = est.estimate_batch(b_raw)
+            mag = np.linalg.norm(b_ref, axis=1).mean()
+            if v not in col_labels_mag:
+                col_labels_mag[v] = []
+            col_labels_mag[v].append(mag)
+
             x = np.linspace(0, 2 * np.pi, N)
 
             ax.fill_between(x, -delta_pre, delta_pre, alpha=0.3, color='gray')
@@ -147,6 +155,8 @@ def main():
 
             ax.axhline(0, color='black', linewidth=0.3)
             ax.set_xlim(0, 2 * np.pi)
+            ymax = max(delta_pre.max(), delta_post.max())
+            ax.set_ylim(-ymax * 1.05, ymax * 1.05)
             ax.set_xticks([0, np.pi, 2 * np.pi])
             ax.set_xticklabels([r'$0$', r'$\pi$', r'$2\pi$'])
 
@@ -156,15 +166,29 @@ def main():
                 ax.set_xlabel(r'$\theta$ [rad]')
 
         # Channel subtitle at top-left of each row
-        axes[row_idx, 0].set_title(row_labels[row_idx], pad=2, loc='left', fontsize=8)
+        axes[row_idx, 0].set_title(row_labels[row_idx], pad=2, loc='left', fontsize=10)
 
-    # Column labels at the top
+    # Column labels at the top: use voltage values
     for col_idx, label in enumerate(col_labels):
         axes[0, col_idx].annotate(label,
                                    xy=(0.5, 1.18), xycoords='axes fraction',
-                                   ha='center', va='bottom', fontsize=8)
+                                   ha='center', va='bottom', fontsize=10)
 
-    plt.subplots_adjust(hspace=0.5, wspace=0.35)
+    # Overall title at top: "magnitude of uniform field [Gs]"
+    fig.text(0.5, 0.98, r'Magnitude of uniform field $\|\bar{\bm{\mathcal{b}}}\|$ [Gs]',
+             ha='center', va='top', fontsize=10)
+
+    plt.subplots_adjust(hspace=0.7, wspace=0.5)
+
+    # Legend: gray = raw, red = calibrated, 1x2 layout
+    # Positioned at same vertical level as Channel X label (left side)
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D([0], [0], color='gray', linewidth=1.5, label='raw'),
+        Line2D([0], [0], color='red',  linewidth=1.5, label='calibrated'),
+    ]
+    fig.legend(handles=legend_elements, loc='upper left',
+               bbox_to_anchor=(0.7, 0.93), frameon=False, fontsize=8, ncol=2)
     out_path = Path(__file__).parent.parent / 'plots' / 'residual_comparison.png'
     out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_path, dpi=600)

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Calibration fitting without magnitude normalization.
+Calibration fitting with per-(channel, voltage) b_ref magnitude normalization.
 
 流程:
 1. 对每组 (channel, voltage) 的所有行，计算 b_ref
-2. 拼接所有 channel-voltage 数据
-3. 对每个传感器拟合 D*b_corr + e = b_ref
-4. 保存结果并评估
+2. 对该组内所有行的 b_ref 做模值归一化：b_ref_norm = b_ref * (mean |b_ref| / |b_ref|)
+3. 拼接所有 channel-voltage 数据
+4. 对每个传感器拟合 D*b_corr + e = b_ref_norm
+5. 保存结果并评估
 """
 
 import numpy as np
@@ -24,17 +25,22 @@ def process_channel_voltage(csv_path):
 
     Returns:
         b_raw: (N, 36) raw sensor data
-        b_ref: (N, 3) center field estimate (no normalization)
+        b_ref: (N, 3) center field estimate
+        b_ref_norm: (N, 3) magnitude-normalized b_ref (mean |b_ref| across all rows)
     """
     df = pd.read_csv(csv_path)
     b_raw = df.values.astype(np.float64)  # (N, 36)
     N = b_raw.shape[0]
 
-    # Compute b_ref for each row
     est = CenterFieldEstimator()
     b_ref = est.estimate_batch(b_raw)  # (N, 3)
 
-    return b_raw, b_ref
+    # Normalize b_ref magnitude per config
+    mag = np.linalg.norm(b_ref, axis=1)           # (N,)
+    mean_mag = mag.mean()                         # scalar
+    b_ref_norm = b_ref * (mean_mag / mag[:, None])  # (N, 3)
+
+    return b_raw, b_ref, b_ref_norm, mean_mag
 
 
 def solve_per_sensor(b_corr_all, b_ref_all):
@@ -124,9 +130,11 @@ def main():
     voltages = ['1', '2', '3', '4', '5']
 
     # Step 1: Process each channel-voltage (truncated + hampel cleaned data)
-    print("Step 1: Processing each channel-voltage (no normalization)...")
+    print("Step 1: Processing each channel-voltage (with b_ref normalization)...")
     all_b_raw = []
     all_b_ref = []
+    all_b_ref_norm = []
+    all_mean_mag = []
 
     for ch in channels:
         for v in voltages:
@@ -134,15 +142,18 @@ def main():
             if not csv_path.exists():
                 print(f"Warning: {csv_path} not found, skipping")
                 continue
-            b_raw, b_ref = process_channel_voltage(csv_path)
+            b_raw, b_ref, b_ref_norm, mean_mag = process_channel_voltage(csv_path)
             all_b_raw.append(b_raw)
             all_b_ref.append(b_ref)
-            print(f"  {ch}/{v}V: {b_raw.shape[0]} rows")
+            all_b_ref_norm.append(b_ref_norm)
+            all_mean_mag.append(mean_mag)
+            print(f"  {ch}/{v}V: {b_raw.shape[0]} rows, mean_mag={mean_mag:.4f}")
 
     # Step 2: Concatenate
     print("\nStep 2: Concatenating data...")
     b_raw_all = np.concatenate(all_b_raw, axis=0)
     b_ref_all = np.concatenate(all_b_ref, axis=0)
+    b_ref_norm_all = np.concatenate(all_b_ref_norm, axis=0)
     print(f"  Total rows: {b_raw_all.shape[0]}")
 
     # Reshape and apply R_CORR
@@ -156,9 +167,9 @@ def main():
         b_corr_all[n] = est.apply_r_corr(filtered)
     print(f"  b_corr_all shape: {b_corr_all.shape}")
 
-    # Step 4: Solve D*b_corr + e = b_ref for each sensor
-    print("\nStep 4: Solving D*b_corr + e = b_ref for each sensor...")
-    results = solve_per_sensor(b_corr_all, b_ref_all)
+    # Step 4: Solve D*b_corr + e = b_ref_norm for each sensor
+    print("\nStep 4: Solving D*b_corr + e = b_ref_norm for each sensor...")
+    results = solve_per_sensor(b_corr_all, b_ref_norm_all)
 
     # Save to JSON
     output_path = Path(base_dir) / 'calibration_results_aggressive.json'
