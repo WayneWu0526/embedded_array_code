@@ -280,18 +280,20 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
     ori_v = np.degrees(all_ori_err[valid_ori])
 
     # Linear fit on linear scale: error = k * (delta_o / |B|) + b
-    coeffs_pos = np.polyfit(ratio_v_pos, pos_v, 1)
-    k_pos, b_pos = coeffs_pos[0], coeffs_pos[1]
+    # Force line through the minimum point (0, e_min), then fit slope k using remaining data
+    idx_min_pos = np.argmin(pos_v)
+    e_P_min = pos_v[idx_min_pos]
+    mask_remaining_pos = np.ones(len(pos_v), dtype=bool)
+    mask_remaining_pos[idx_min_pos] = False
+    k_pos = np.polyfit(ratio_v_pos[mask_remaining_pos], pos_v[mask_remaining_pos] - e_P_min, 1)[0]
+    b_pos = e_P_min
 
-    # For orientation: force line through the minimum point (ratio_min, e_R_min)
-    # then fit slope k using remaining data
     idx_min_ori = np.argmin(ori_v)
-    ratio_min_ori = ratio_v_ori[idx_min_ori]
     e_R_min = ori_v[idx_min_ori]
-    mask_remaining = np.ones(len(ratio_v_ori), dtype=bool)
-    mask_remaining[idx_min_ori] = False
-    k_ori = np.polyfit(ratio_v_ori[mask_remaining], ori_v[mask_remaining] - e_R_min, 1)[0]
-    b_ori = e_R_min - k_ori * ratio_min_ori
+    mask_remaining_ori = np.ones(len(ori_v), dtype=bool)
+    mask_remaining_ori[idx_min_ori] = False
+    k_ori = np.polyfit(ratio_v_ori[mask_remaining_ori], ori_v[mask_remaining_ori] - e_R_min, 1)[0]
+    b_ori = e_R_min
 
     fontsize = 16
     # Plot
@@ -317,74 +319,88 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
 
     # ---- Position error subplot ----
     ax = axes[0]
-    ax.scatter(ratio_v_pos, pos_v, alpha=0.3, s=10, color='black', edgecolors='none')
+
+    # Ratio ranges from residual_std_table.csv
+    raw_mean, raw_std = 0.384549, 0.180804
+    cal_mean, cal_std = 0.059665, 0.033900
+    raw_lo, raw_hi = (raw_mean - raw_std) / 10, (raw_mean + raw_std) / 10
+    cal_lo, cal_hi = (cal_mean - cal_std) / 10, (cal_mean + cal_std) / 10
+
+    # Color scatter points by x-range: blue=Raw, red=Cal, black=other
+    idx_raw = (ratio_v_pos >= raw_lo) & (ratio_v_pos <= raw_hi)
+    idx_cal = (ratio_v_pos >= cal_lo) & (ratio_v_pos <= cal_hi)
+    idx_other = ~idx_raw & ~idx_cal
+
+    ax.scatter(ratio_v_pos[idx_other], pos_v[idx_other], alpha=0.5, s=10, color='black', edgecolors='none')
+    ax.scatter(ratio_v_pos[idx_raw], pos_v[idx_raw], alpha=0.8, s=10, color='#1f77b4', edgecolors='none')
+    ax.scatter(ratio_v_pos[idx_cal], pos_v[idx_cal], alpha=0.8, s=10, color='#d62728', edgecolors='none')
 
     # Linear fit line - start from actual min ratio (no extrapolation to 0)
     ratio_fit_pos = np.linspace(ratio_v_pos.min(), ratio_v_pos.max() * 1.05, 200)
     pos_fit = k_pos * ratio_fit_pos + b_pos
     ln_fit, = ax.plot(ratio_fit_pos, pos_fit, 'k-', linewidth=1.5)
 
-    # Add vertical and horizontal lines for key delta_o levels
-    key_ratios = [0.0, 0.00597, 0.03845]
-    colors = ['#2ca02c', '#d62728', '#1f77b4']  # Green (Ideal), Red (Calibrated), Blue (Uncalibrated)
-    labels = ['Ideal', 'Cal.', 'Raw']
-
-    key_handles = []
-    for r, c, l in zip(key_ratios, colors, labels):
-        err_val = k_pos * r + b_pos
-        ax.vlines(x=r, ymin=-150, ymax=err_val, color=c, linestyle='-', linewidth=1.5)
-        ax.hlines(y=err_val, xmin=-1, xmax=r, color=c, linestyle='-', linewidth=1.5)
-        ln, = ax.plot([], [], color=c, linewidth=1.5, label=l)
-        key_handles.append(ln)
+    # Legend entries for colored scatter groups
+    ln_raw, = ax.plot([], [], color='#1f77b4', linewidth=0, marker='o', markersize=4, label='Raw')
+    ln_cal, = ax.plot([], [], color='#d62728', linewidth=0, marker='o', markersize=4, label='Cal.')
+    # Green dot: Ideal at x=0
+    ax.scatter([0], [b_pos], s=20, color='#2ca02c', zorder=5)
+    ln_ideal, = ax.plot([], [], color='#2ca02c', linewidth=0, marker='o', markersize=4, label='Ideal')
 
     # Force LaTeX rendering for ticks
     ax.xaxis.set_major_formatter(plt.FormatStrFormatter('$%g$'))
     ax.yaxis.set_major_formatter(plt.FormatStrFormatter('$%g$'))
 
-    ax.set_xlim(left=-0.0133, right=0.08)
-    ax.set_ylim(bottom=-30, top=180)
+    ax.set_xlim(left=-1e-3, right=0.08)
+    ax.set_ylim(bottom=-0.1, top=180)
 
     ax.set_xlabel(r'$\Delta o / \|\bar{\bm{\mathcal{b}}}\|$')
     ax.set_ylabel(r'$e_{\bm{p}}\ \mathrm{[mm]}$')
     ax.grid(True, alpha=0.2, linestyle=':')
-    # Legend order: Fit, Samples, Ideal, Cal., Raw
+    # Legend order: Fit, Samples, Raw, Cal.
     ln_samples, = ax.plot([], [], color='black', linewidth=0, marker='o', markersize=4, label='Samples')
-    ax.legend([ln_fit, ln_samples] + key_handles,
-              ['Fit', 'Samples', 'Ideal', 'Cal.', 'Raw'],
+    ax.legend([ln_fit, ln_samples, ln_raw, ln_cal, ln_ideal],
+              ['Fit', 'Samples', 'Raw', 'Cal.', 'Ideal'],
               fontsize=12, loc='lower right')
 
     print(f"Position linear fit: error = {k_pos:.4f} * (Δ_o/|B|) + {b_pos:.4f}")
 
     # ---- Orientation error subplot ----
     ax = axes[1]
-    ax.scatter(ratio_v_ori, ori_v, alpha=0.3, s=10, color='black', edgecolors='none')
+
+    # Color scatter points by x-range: blue=Raw, red=Cal, black=other
+    idx_raw_ori = (ratio_v_ori >= raw_lo) & (ratio_v_ori <= raw_hi)
+    idx_cal_ori = (ratio_v_ori >= cal_lo) & (ratio_v_ori <= cal_hi)
+    idx_other_ori = ~idx_raw_ori & ~idx_cal_ori
+
+    ax.scatter(ratio_v_ori[idx_other_ori], ori_v[idx_other_ori], alpha=0.5, s=10, color='black', edgecolors='none')
+    ax.scatter(ratio_v_ori[idx_raw_ori], ori_v[idx_raw_ori], alpha=0.8, s=10, color='#1f77b4', edgecolors='none')
+    ax.scatter(ratio_v_ori[idx_cal_ori], ori_v[idx_cal_ori], alpha=0.8, s=10, color='#d62728', edgecolors='none')
 
     ratio_fit_ori = np.linspace(ratio_v_ori.min(), ratio_v_ori.max() * 1.05, 200)
     ori_fit = k_ori * ratio_fit_ori + b_ori
     ln_fit_ori, = ax.plot(ratio_fit_ori, ori_fit, 'k-', linewidth=1.5)
 
-    ori_handles = []
-    for r, c, l in zip(key_ratios, colors, labels):
-        err_val = k_ori * r + b_ori
-        ax.vlines(x=r, ymin=-150, ymax=err_val, color=c, linestyle='-', linewidth=1.5, alpha=0.8)
-        ax.hlines(y=err_val, xmin=-1, xmax=r, color=c, linestyle='-', linewidth=1.5, alpha=0.8)
-        ln, = ax.plot([], [], color=c, linewidth=1.5, label=l)
-        ori_handles.append(ln)
+    ln_raw_ori, = ax.plot([], [], color='#1f77b4', linewidth=0, marker='o', markersize=4, label='Raw')
+    ln_cal_ori, = ax.plot([], [], color='#d62728', linewidth=0, marker='o', markersize=4, label='Cal.')
+    # Green dot: Ideal at x=0
+    ax.scatter([0], [b_ori], s=20, color='#2ca02c', zorder=5)
+    ln_ideal_ori, = ax.plot([], [], color='#2ca02c', linewidth=0, marker='o', markersize=4, label='Ideal')
 
     # Force LaTeX rendering for ticks
     ax.xaxis.set_major_formatter(plt.FormatStrFormatter('$%g$'))
     ax.yaxis.set_major_formatter(plt.FormatStrFormatter('$%g$'))
 
-    ax.set_xlim(left=-0.0077, right=0.07)
-    ax.set_ylim(bottom=-20, top=180)
+    ax.set_xlim(left=-1e-3, right=0.08)
+    ax.set_ylim(bottom=-0.1, top=135)
 
     ax.set_xlabel(r'$\Delta o / \|\bar{\bm{\mathcal{b}}}\|$')
     ax.set_ylabel(r'$e_{\bm{R}}\ \mathrm{[^\circ]}$')
     ax.grid(True, alpha=0.2, linestyle=':')
     ln_samples_ori, = ax.plot([], [], color='black', linewidth=0, marker='o', markersize=4, label='Samples')
-    ax.legend([ln_fit_ori, ln_samples_ori] + ori_handles,
-              ['Fit', 'Samples', 'Ideal', 'Cal.', 'Raw'],
-              fontsize=12, loc='upper left')
+    ax.legend([ln_fit_ori, ln_samples_ori, ln_raw_ori, ln_cal_ori, ln_ideal_ori],
+              ['Fit', 'Samples', 'Raw', 'Cal.', 'Ideal'],
+              fontsize=12, loc='lower right')
 
     print(f"Orientation linear fit: error = {k_ori:.4f} * (Δ_o/|B|) + {b_ori:.4f}")
 
