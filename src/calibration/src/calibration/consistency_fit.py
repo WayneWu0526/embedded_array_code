@@ -15,12 +15,16 @@ consistency_fit.py - Phase 2: 一致性校准算法
 
 import numpy as np
 import json
+import re
+import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, asdict
 
 from sensor_array_config.base import get_config, SensorArrayConfig, ConsistencyParamsSet, ConsistencyParams, IntrinsicParamsSet
 
+# ============== 常量 ==============
+VOLTAGE_ORDER = (5, 4, 3, 2, 1)
 
 # ============== 椭球校正与放大系数 ==============
 def apply_ellipsoid_correction_to_data(b_raw: np.ndarray, o_i: np.ndarray, C_i: np.ndarray) -> np.ndarray:
@@ -795,6 +799,714 @@ def load_consistency_params(
     D_dict = {sid: np.array(p.D_i) for sid, p in params_set.params.items()}
     e_dict = {sid: np.array(p.e_i) for sid, p in params_set.params.items()}
     return D_dict, e_dict, params_set.amp_factor
+
+
+def parse_magnitude_txt(magnitude_path: Path) -> Dict[str, Dict[int, float]]:
+    """
+    解析 magnitude.txt 文件，提取各 channel 各 voltage 下的参考磁场强度
+
+    Args:
+        magnitude_path: magnitude.txt 文件路径
+
+    Returns:
+        {channel: {voltage: magnitude}}
+        例如: {'z': {5: 25.0, 4: 20.0, 3: 14.8, 2: 9.4, 1: 4.3}, 'y': {5: 25.0, 4: 20.0, 3: 14.8, 2: 10.0, 1: 4.8}, 'x': {5: 25.0, 4: 19.8, 3: 15.0, 2: 9.7, 1: 4.8}}
+    """
+    result = {}
+
+    content = magnitude_path.read_text()
+    # Match channel blocks
+    channel_blocks = re.split(r'channel,\s*(\w+)', content)
+    # channel_blocks[0] is empty or before first match, [1] is channel name, [2] is content, etc.
+    for i in range(1, len(channel_blocks), 2):
+        channel = channel_blocks[i]
+        block = channel_blocks[i + 1] if i + 1 < len(channel_blocks) else ''
+
+        # Extract magnitude line
+        mag_match = re.search(r'magnitude,\s*([\d.,\s]+)', block)
+        if mag_match:
+            mag_values = [float(v.strip()) for v in mag_match.group(1).split(',')]
+            if len(mag_values) != len(VOLTAGE_ORDER):
+                raise ValueError(
+                    f"Channel '{channel}': expected {len(VOLTAGE_ORDER)} magnitude values "
+                    f"(for voltages {VOLTAGE_ORDER}), but got {len(mag_values)} values: {mag_values}"
+                )
+            result[channel] = {VOLTAGE_ORDER[j]: mag_values[j] for j in range(len(VOLTAGE_ORDER))}
+        else:
+            print(f"[WARNING] Channel '{channel}' has no magnitude line, skipping")
+
+    if not result:
+        print("[WARNING] parse_magnitude_txt: no valid channel data found, returning empty dict")
+
+    return result
+
+
+def load_manual_calibration_data(
+    data_dir: Path,
+    channel: str,
+    voltage: int,
+    n_sensors: int = 12
+) -> np.ndarray:
+    """
+    加载指定 channel 和 voltage 的手动标定数据
+
+    Args:
+        data_dir: 父目录 (e.g., .../sensor_data_collection/data)
+        channel: 'x', 'y', or 'z'
+        voltage: 1, 2, 3, 4, 5
+
+    Returns:
+        data: (N_samples, n_sensors, 3) 原始传感器数据
+    """
+    if n_sensors < 1:
+        raise ValueError(f"n_sensors must be >= 1, got {n_sensors}")
+
+    if channel not in ('x', 'y', 'z'):
+        raise ValueError(f"channel must be 'x', 'y', or 'z', got '{channel}'")
+    if voltage not in (1, 2, 3, 4, 5):
+        raise ValueError(f"voltage must be 1, 2, 3, 4, or 5, got {voltage}")
+
+    csv_path = data_dir / f"manual_{channel}" / f"manual_record_{voltage}V.csv"
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Manual calibration CSV not found: {csv_path}")
+
+    df = pd.read_csv(csv_path)
+    cols = [c for c in df.columns if c.startswith('sensor_')]
+    if not cols:
+        raise ValueError(f"No sensor_* columns found in {csv_path}")
+    data = df[cols].values
+    n_samples = data.shape[0]
+    if n_samples == 0:
+        raise ValueError(f"CSV file is empty: {csv_path}")
+    reshaped = np.zeros((n_samples, n_sensors, 3))
+    for i in range(n_sensors):
+        reshaped[:, i, :] = data[:, i*3:(i+1)*3]
+    return reshaped
+
+
+def consistency_check_by_magnitude(
+    data_dir: Path,
+    magnitude_path: Path,
+    sensor_config: SensorArrayConfig = None,
+    intrinsic_params: IntrinsicParamsSet = None,
+    channel: str = 'x',
+    voltage: int = 5,
+    logger=None,
+) -> Dict:
+    """
+    基于 magnitude.txt 参考值进行一致性检验
+
+    算法：
+    1. 解析 magnitude.txt 获取指定 channel/voltage 的参考磁场强度
+    2. 加载 manual_{channel}/manual_record_{voltage}V.csv 原始数据
+    3. 对每颗传感器应用椭球校准: b_corr = C_i @ (b_raw - o_i)
+    4. 计算每行校准后数据的模值: |b_corr|
+    5. 计算比例系数: ratio = reference_magnitude / |b_corr|
+    6. 统计各传感器的 mean_ratio 和 std_ratio
+
+    Args:
+        data_dir: .../sensor_data_collection/data 目录
+        magnitude_path: magnitude.txt 文件路径
+        sensor_config: 传感器配置 (默认 QMC6309)
+        intrinsic_params: 椭球校准内参 (o_i, C_i)
+        channel: 'x', 'y', or 'z'
+        voltage: 1, 2, 3, 4, 5
+        logger: 日志函数 (默认 print)
+
+    Returns:
+        {
+            'channel': channel,
+            'voltage': voltage,
+            'reference_magnitude': float,
+            'sensor_results': {
+                sensor_id: {
+                    'mean_ratio': float,
+                    'std_ratio': float,
+                    'calibrated_magnitudes': [float],  # list of |b_corr| per sample
+                }
+            }
+        }
+    """
+    if logger is None:
+        def logger(*args, **kwargs):
+            print(*args, **kwargs)
+
+    if sensor_config is None:
+        sensor_config = get_config("QMC6309")
+    n_sensors = sensor_config.manifest.n_sensors
+
+    # Step 1: 解析 magnitude.txt 获取参考磁场强度
+    magnitude_data = parse_magnitude_txt(magnitude_path)
+    if channel not in magnitude_data:
+        raise ValueError(f"Channel '{channel}' not found in magnitude.txt. Available: {list(magnitude_data.keys())}")
+    if voltage not in magnitude_data[channel]:
+        raise ValueError(f"Voltage {voltage} not found for channel '{channel}'. Available: {list(magnitude_data[channel].keys())}")
+
+    reference_magnitude = magnitude_data[channel][voltage]
+
+    # Step 2: 加载手动标定原始数据
+    raw_data = load_manual_calibration_data(data_dir, channel, voltage, n_sensors)
+    n_samples = raw_data.shape[0]
+
+    # Step 3-6: 对每颗传感器应用椭球校正，计算模值和比例系数
+    sensor_results = {}
+
+    for i in range(n_sensors):
+        sensor_id = i + 1
+        b_raw = raw_data[:, i, :]  # (N, 3)
+
+        # 应用椭球校准（如果提供了 intrinsic_params）
+        if intrinsic_params is not None:
+            o_i = np.array(intrinsic_params.params[sensor_id].o_i)
+            C_i = np.array(intrinsic_params.params[sensor_id].C_i)
+            b_corr = apply_ellipsoid_correction_to_data(b_raw, o_i, C_i)
+        else:
+            b_corr = b_raw
+
+        # Step 4: 计算校准后数据的模值
+        magnitudes = np.linalg.norm(b_corr, axis=1)  # (N,)
+
+        # Step 5: 计算比例系数
+        ratios = reference_magnitude / magnitudes
+
+        # Step 6: 统计 mean_ratio 和 std_ratio
+        mean_ratio = float(np.mean(ratios))
+        std_ratio = float(np.std(ratios))
+
+        sensor_results[sensor_id] = {
+            'mean_ratio': mean_ratio,
+            'std_ratio': std_ratio,
+            'calibrated_magnitudes': magnitudes.tolist(),
+        }
+
+    # 打印统计信息
+    logger("\n" + "=" * 50)
+    logger("Consistency Check by Magnitude")
+    logger("=" * 50)
+    logger(f"  Channel: {channel}, Voltage: {voltage}V")
+    logger(f"  Reference magnitude: {reference_magnitude:.4f}")
+    logger(f"  Number of samples: {n_samples}")
+    logger(f"  Number of sensors: {n_sensors}")
+    logger("-" * 50)
+    logger(f"  {'Sensor':<10} {'Mean Ratio':>12} {'Std Ratio':>12}")
+    logger(f"  {'-'*36}")
+    for sid in range(1, n_sensors + 1):
+        sr = sensor_results[sid]
+        logger(f"  {sid:<10} {sr['mean_ratio']:>12.4f} {sr['std_ratio']:>12.4f}")
+    logger(f"  {'-'*36}")
+
+    # Overall statistics
+    all_mean_ratios = [sensor_results[sid]['mean_ratio'] for sid in range(1, n_sensors + 1)]
+    all_std_ratios = [sensor_results[sid]['std_ratio'] for sid in range(1, n_sensors + 1)]
+    logger(f"  {'Overall Mean:':<10} {np.mean(all_mean_ratios):>12.4f} {np.std(all_mean_ratios):>12.4f}")
+    logger(f"  {'Overall Std:':<10} {np.std(all_mean_ratios):>12.4f} {np.std(all_std_ratios):>12.4f}")
+    logger("=" * 50)
+
+    return {
+        'channel': channel,
+        'voltage': voltage,
+        'reference_magnitude': reference_magnitude,
+        'sensor_results': sensor_results,
+    }
+
+
+def batch_consistency_check_by_magnitude(
+    data_dir: Path,
+    magnitude_path: Path,
+    sensor_config: SensorArrayConfig = None,
+    intrinsic_params: IntrinsicParamsSet = None,
+    verbose: bool = True,
+    logger=None,
+) -> List[Dict]:
+    """
+    批量执行所有 channel 和 voltage 的 magnitude-based 一致性检验
+
+    遍历所有 channel 和 voltage 组合，
+    对每种组合调用 consistency_check_by_magnitude。
+
+    Args:
+        data_dir: .../sensor_data_collection/data 目录
+        magnitude_path: magnitude.txt 文件路径
+        sensor_config: 传感器配置 (默认 QMC6309)
+        intrinsic_params: 椭球校准内参
+        verbose: 是否输出详细信息 (默认 True)
+        logger: 日志函数 (默认 print)
+
+    Returns:
+        List of results for each (channel, voltage) combination.
+        Each result is the dict returned by consistency_check_by_magnitude.
+    """
+    if logger is None:
+        if verbose:
+            def logger(*args, **kwargs):
+                print(*args, **kwargs)
+        else:
+            def logger(*args, **kwargs):
+                pass
+
+    results = []
+
+    # Get channels from magnitude.txt dynamically
+    magnitude_data = parse_magnitude_txt(magnitude_path)
+    channels = list(magnitude_data.keys())
+
+    for channel in channels:
+        for voltage in VOLTAGE_ORDER:
+            try:
+                result = consistency_check_by_magnitude(
+                    data_dir=data_dir,
+                    magnitude_path=magnitude_path,
+                    sensor_config=sensor_config,
+                    intrinsic_params=intrinsic_params,
+                    channel=channel,
+                    voltage=voltage,
+                    logger=logger,
+                )
+                results.append(result)
+            except Exception as e:
+                logger(f"[ERROR] Failed for channel={channel}, voltage={voltage}: {e}")
+                continue
+
+    return results
+
+
+def compute_sensor_gains(
+    data_dir: Path,
+    magnitude_path: Path,
+    sensor_config: SensorArrayConfig = None,
+    intrinsic_params: IntrinsicParamsSet = None,
+    logger=None,
+) -> Dict[int, Dict]:
+    """
+    计算每个传感器的模值增益 s_i
+
+    算法：
+    1. 加载 manual_x/y/z 目录下所有电压(1-5V)的数据
+    2. 对每个 sensor_i:
+       - 拼接所有 channel/voltage 的校准后模值 (N, 1)
+       - 拼接对应的 reference magnitude 列向量 (N, 1) = magnitude * ones(N, 1)
+       - 用最小二乘求解: ref = s_i * cal => s_i = (cal^T * ref) / (cal^T * cal)
+
+    Args:
+        data_dir: .../sensor_data_collection/data 目录
+        magnitude_path: magnitude.txt 文件路径
+        sensor_config: 传感器配置 (默认 QMC6309)
+        intrinsic_params: 椭球校准内参 (o_i, C_i)
+        logger: 日志函数 (默认 print)
+
+    Returns:
+        {sensor_id: {
+            's_i': float,           # 增益系数
+            'r_squared': float,     # R² 决定系数
+            'rmse': float,          # RMSE
+            'n_samples': int        # 样本数
+        }}
+    """
+    if logger is None:
+        def logger(*args, **kwargs):
+            print(*args, **kwargs)
+
+    if sensor_config is None:
+        sensor_config = get_config("QMC6309")
+    n_sensors = sensor_config.manifest.n_sensors
+
+    # Step 1: 解析 magnitude.txt
+    magnitude_data = parse_magnitude_txt(magnitude_path)
+
+    # Step 2: 收集所有 channel/voltage 组合
+    # 构建 (cal_magnitudes, ref_magnitudes) 数据对
+    all_data = []  # list of (cal_mag, ref_mag) tuples per sensor
+
+    channels = list(magnitude_data.keys())
+
+    for channel in channels:
+        for voltage in VOLTAGE_ORDER:
+            try:
+                raw_data = load_manual_calibration_data(data_dir, channel, voltage, n_sensors)
+            except FileNotFoundError as e:
+                logger(f"[WARN] {e}")
+                continue
+
+            ref_mag = magnitude_data[channel][voltage]
+
+            # 对每颗传感器应用椭球校正并计算模值
+            for i in range(n_sensors):
+                sensor_id = i + 1
+                b_raw = raw_data[:, i, :]  # (N, 3)
+
+                if intrinsic_params is not None:
+                    o_i = np.array(intrinsic_params.params[sensor_id].o_i)
+                    C_i = np.array(intrinsic_params.params[sensor_id].C_i)
+                    b_corr = apply_ellipsoid_correction_to_data(b_raw, o_i, C_i)
+                else:
+                    b_corr = b_raw
+
+                # 计算模值
+                cal_mags = np.linalg.norm(b_corr, axis=1, keepdims=True)  # (N, 1)
+                ref_vec = np.full((b_corr.shape[0], 1), ref_mag)  # (N, 1)
+
+                all_data.append((cal_mags, ref_vec))
+
+    # Step 3: 对每颗传感器拼接所有数据并求解最小二乘
+    results = {}
+
+    for i in range(n_sensors):
+        sensor_id = i + 1
+
+        # 拼接该传感器所有 channel/voltage 的数据
+        cal_list = [all_data[j][0][:, 0] for j in range(i, len(all_data), n_sensors)]
+        ref_list = [all_data[j][1][:, 0] for j in range(i, len(all_data), n_sensors)]
+
+        if not cal_list:
+            logger(f"[WARN] No data for sensor {sensor_id}")
+            continue
+
+        cal_all = np.concatenate(cal_list)  # (N_total,)
+        ref_all = np.concatenate(ref_list)  # (N_total,)
+
+        n_samples = len(cal_all)
+
+        # 最小二乘求解: ref = s_i * cal
+        # s_i = (cal^T * ref) / (cal^T * cal)
+        cal_col = cal_all.reshape(-1, 1)  # (N, 1)
+        ref_col = ref_all.reshape(-1, 1)  # (N, 1)
+
+        s_i = float((cal_col.T @ ref_col) / (cal_col.T @ cal_col))
+
+        # 计算拟合值和残差
+        ref_pred = s_i * cal_col
+        residuals = ref_col - ref_pred
+
+        # RMSE
+        rmse = float(np.sqrt(np.mean(residuals ** 2)))
+
+        # R² 决定系数
+        ss_res = float(np.sum(residuals ** 2))
+        ss_tot = float(np.sum((ref_col - np.mean(ref_col)) ** 2))
+        r_squared = 1.0 - (ss_res / (ss_tot + 1e-10))
+
+        results[sensor_id] = {
+            's_i': s_i,
+            'r_squared': r_squared,
+            'rmse': rmse,
+            'n_samples': n_samples,
+        }
+
+    # 打印摘要
+    logger("\n" + "=" * 50)
+    logger("Compute Sensor Gains Summary")
+    logger("=" * 50)
+    logger(f"  {'Sensor':<10} {'s_i':>12} {'R²':>12} {'RMSE':>12} {'N':>8}")
+    logger(f"  {'-' * 50}")
+    for sid in range(1, n_sensors + 1):
+        if sid in results:
+            r = results[sid]
+            logger(f"  {sid:<10} {r['s_i']:>12.6f} {r['r_squared']:>12.6f} {r['rmse']:>12.6f} {r['n_samples']:>8}")
+    logger(f"  {'-' * 50}")
+
+    s_values = [results[sid]['s_i'] for sid in range(1, n_sensors + 1) if sid in results]
+    if s_values:
+        logger(f"  {'Mean s_i:':<10} {np.mean(s_values):>12.6f}")
+        logger(f"  {'Std s_i:':<10} {np.std(s_values):>12.6f}")
+    logger("=" * 50)
+
+    return results
+
+
+def compute_rowwise_sensor_consistency_metric(
+    data: np.ndarray,
+    sensor_ids: List[int] = None,
+) -> Dict:
+    """
+    计算逐行传感器间分量标准差（within-row sensor std）
+
+    对数据形状 (N, 12, 3)，对每一行的 12 个传感器计算 x/y/z 三个分量的 std。
+
+    Args:
+        data: (N, 12, 3) 数据
+        sensor_ids: 可选，传感器 ID 列表（不用于计算，仅保留在返回中）
+
+    Returns:
+        包含聚合指标的字典
+    """
+    data = np.asarray(data)
+    assert data.ndim == 3 and data.shape[1] == 12, \
+        f"Expected (N, 12, 3), got {data.shape}"
+    n_rows = data.shape[0]
+
+    std_x_per_row = np.std(data[:, :, 0], axis=1)
+    std_y_per_row = np.std(data[:, :, 1], axis=1)
+    std_z_per_row = np.std(data[:, :, 2], axis=1)
+
+    all_stds = np.concatenate([std_x_per_row, std_y_per_row, std_z_per_row])
+
+    return {
+        'grand_mean_std': float(np.mean(all_stds)),
+        'grand_max_std': float(np.max(all_stds)),
+        'percentile_95_std': float(np.percentile(all_stds, 95)),
+        'std_x_per_row': std_x_per_row,
+        'std_y_per_row': std_y_per_row,
+        'std_z_per_row': std_z_per_row,
+        'n_rows': n_rows,
+    }
+
+
+def compare_calibration_methods(
+    data_dir: Path,
+    magnitude_path: Path,
+    intrinsic_params: IntrinsicParamsSet,
+    r_corr_dict: Dict[int, np.ndarray],
+    sensor_gains: Dict[int, Dict],
+    sensor_config: SensorArrayConfig = None,
+    logger=None,
+) -> Dict:
+    """
+    对比两个校准路径的逐行传感器一致性指标
+
+    Path A (baseline): R_CORR × b_raw
+    Path B (full):     R_CORR × s_i × (C_i × (b_raw - o_i))
+
+    Args:
+        data_dir: .../sensor_data_collection/data 目录
+        magnitude_path: magnitude.txt 路径
+        intrinsic_params: 椭球参数 (o_i, C_i)
+        r_corr_dict: {sensor_id: (3,3)} R_CORR 矩阵字典
+        sensor_gains: {sensor_id: {'s_i': float}} 模值增益字典
+        sensor_config: 传感器配置
+        logger: 日志函数
+
+    Returns:
+        包含两个路径指标的完整对比结果字典
+    """
+    if logger is None:
+        def logger(*args, **kwargs):
+            print(*args, **kwargs)
+
+    if sensor_config is None:
+        sensor_config = get_config("QMC6309")
+    n_sensors = sensor_config.manifest.n_sensors
+
+    magnitude_data = parse_magnitude_txt(magnitude_path)
+    channels = list(magnitude_data.keys())
+
+    # 收集所有数据路径
+    all_raw_data = []  # list of (channel, voltage, data) tuples
+    for channel in channels:
+        for voltage in VOLTAGE_ORDER:
+            try:
+                raw_data = load_manual_calibration_data(
+                    data_dir, channel, voltage, n_sensors
+                )
+                all_raw_data.append((channel, voltage, raw_data))
+            except FileNotFoundError:
+                logger(f"[WARN] Missing: manual_{channel}/manual_record_{voltage}V.csv")
+                continue
+
+    # ---------- Path A: R_CORR × b_raw ----------
+    all_path_a_concat = []
+    # ---------- Path B: R_CORR × s_i × (C_i × (b_raw - o_i)) ----------
+    all_path_b_concat = []
+    # ---------- 按 channel 分组 ----------
+    per_channel_a = {ch: [] for ch in channels}
+    per_channel_b = {ch: [] for ch in channels}
+    # ---------- 按 voltage 分组 ----------
+    per_voltage_a = {v: [] for v in VOLTAGE_ORDER}
+    per_voltage_b = {v: [] for v in VOLTAGE_ORDER}
+
+    for channel, voltage, b_raw in all_raw_data:
+        # Path A
+        b_a = np.zeros_like(b_raw)
+        for sid in range(1, n_sensors + 1):
+            b_a[:, sid-1, :] = apply_r_corr_rotation(b_raw[:, sid-1, :], r_corr_dict[sid])
+
+        # Path B
+        b_b = np.zeros_like(b_raw)
+        for sid in range(1, n_sensors + 1):
+            o_i = np.array(intrinsic_params.params[sid].o_i)
+            C_i = np.array(intrinsic_params.params[sid].C_i)
+            s_i = sensor_gains[sid]['s_i']
+            b_ellipsoid = apply_ellipsoid_correction_to_data(b_raw[:, sid-1, :], o_i, C_i)
+            b_with_gain = s_i * b_ellipsoid
+            b_b[:, sid-1, :] = apply_r_corr_rotation(b_with_gain, r_corr_dict[sid])
+
+        # 收集用于全局指标
+        all_path_a_concat.append(b_a)
+        all_path_b_concat.append(b_b)
+        per_channel_a[channel].append(b_a)
+        per_channel_b[channel].append(b_b)
+        per_voltage_a[voltage].append(b_a)
+        per_voltage_b[voltage].append(b_b)
+
+    # 合并所有数据
+    all_path_a = np.concatenate(all_path_a_concat, axis=0)  # (N_total, 12, 3)
+    all_path_b = np.concatenate(all_path_b_concat, axis=0)
+
+    # 计算全局指标
+    metric_a = compute_rowwise_sensor_consistency_metric(all_path_a)
+    metric_b = compute_rowwise_sensor_consistency_metric(all_path_b)
+
+    # 计算 per-channel 指标
+    per_channel_results = {}
+    for ch in channels:
+        if per_channel_a[ch]:
+            ca = np.concatenate(per_channel_a[ch], axis=0)
+            cb = np.concatenate(per_channel_b[ch], axis=0)
+            per_channel_results[ch] = {
+                'path_a': compute_rowwise_sensor_consistency_metric(ca),
+                'path_b': compute_rowwise_sensor_consistency_metric(cb),
+            }
+
+    # 计算 per-voltage 指标
+    per_voltage_results = {}
+    for v in VOLTAGE_ORDER:
+        if per_voltage_a[v]:
+            va = np.concatenate(per_voltage_a[v], axis=0)
+            vb = np.concatenate(per_voltage_b[v], axis=0)
+            per_voltage_results[v] = {
+                'path_a': compute_rowwise_sensor_consistency_metric(va),
+                'path_b': compute_rowwise_sensor_consistency_metric(vb),
+            }
+
+    # ---------- 新增：逐 sensor 逐 channel/voltage 模值重复性指标 ----------
+    # 对每颗传感器、每个 channel/voltage，计算跨行模值 std（衡量单传感器重复性）
+    per_sensor_mag_std = {}
+    for sid in range(1, n_sensors + 1):
+        sid_key = f"sensor_{sid}"
+        per_sensor_mag_std[sid_key] = {}
+        for ch in channels:
+            per_sensor_mag_std[sid_key][ch] = {}
+            for v in VOLTAGE_ORDER:
+                # 找到对应 channel/voltage 的原始索引
+                for idx, (c, volt, _) in enumerate(all_raw_data):
+                    if c == ch and volt == v:
+                        # Path A: (N, 3) 取第 sid-1 号传感器 → 计算每行模值 → std across rows
+                        mag_a = np.linalg.norm(all_path_a_concat[idx][:, sid-1, :], axis=1)
+                        mag_b = np.linalg.norm(all_path_b_concat[idx][:, sid-1, :], axis=1)
+                        per_sensor_mag_std[sid_key][ch][v] = {
+                            'path_a': float(np.std(mag_a)),
+                            'path_b': float(np.std(mag_b)),
+                        }
+                        break
+
+    # 聚合到 per-sensor 级别（跨所有 channel/voltage 的平均）
+    per_sensor_agg = {}
+    for sid in range(1, n_sensors + 1):
+        sid_key = f"sensor_{sid}"
+        all_a = []
+        all_b = []
+        for ch in channels:
+            for v in VOLTAGE_ORDER:
+                if sid_key in per_sensor_mag_std and ch in per_sensor_mag_std[sid_key] and v in per_sensor_mag_std[sid_key][ch]:
+                    all_a.append(per_sensor_mag_std[sid_key][ch][v]['path_a'])
+                    all_b.append(per_sensor_mag_std[sid_key][ch][v]['path_b'])
+        if all_a:
+            per_sensor_agg[sid_key] = {
+                'path_a': float(np.mean(all_a)),
+                'path_b': float(np.mean(all_b)),
+            }
+
+    # 聚合到总体（跨所有 sensor/channel/voltage）
+    all_mag_a = []
+    all_mag_b = []
+    for sid_key in per_sensor_agg:
+        for ch in channels:
+            for v in VOLTAGE_ORDER:
+                if ch in per_sensor_mag_std[sid_key] and v in per_sensor_mag_std[sid_key][ch]:
+                    all_mag_a.append(per_sensor_mag_std[sid_key][ch][v]['path_a'])
+                    all_mag_b.append(per_sensor_mag_std[sid_key][ch][v]['path_b'])
+    grand_mag_std = {
+        'path_a': float(np.mean(all_mag_a)),
+        'path_b': float(np.mean(all_mag_b)),
+    }
+
+    result = {
+        'path_a': {
+            'method': 'R_CORR × b_raw',
+            'metric': metric_a,
+        },
+        'path_b': {
+            'method': 'R_CORR × s_i × (C_i × (b_raw - o_i))',
+            'metric': metric_b,
+        },
+        'per_channel_results': per_channel_results,
+        'per_voltage_results': per_voltage_results,
+        'total_samples': all_path_a.shape[0],
+        'per_sensor_mag_std': per_sensor_mag_std,
+        'per_sensor_agg': per_sensor_agg,
+        'grand_mag_std': grand_mag_std,
+    }
+
+    # 打印摘要
+    logger("\n" + "=" * 60)
+    logger("Calibration Comparison Summary")
+    logger("=" * 60)
+    logger(f"  Total samples: {all_path_a.shape[0]}")
+    logger("")
+    logger(f"  {'Metric':<25} {'Path A (R_CORR)':>18} {'Path B (Full)':>18} {'Improvement':>12}")
+    logger(f"  {'-' * 75}")
+
+    for key in ['grand_mean_std', 'grand_max_std', 'percentile_95_std']:
+        va = metric_a[key]
+        vb = metric_b[key]
+        imp = (va - vb) / (va + 1e-10) * 100
+        logger(f"  {key:<25} {va:>18.6f} {vb:>18.6f} {imp:>+11.1f}%")
+
+    logger(f"  {'-' * 75}")
+    logger("  Per-channel:")
+    for ch in channels:
+        if ch in per_channel_results:
+            ma = per_channel_results[ch]['path_a']['grand_mean_std']
+            mb = per_channel_results[ch]['path_b']['grand_mean_std']
+            imp = (ma - mb) / (ma + 1e-10) * 100
+            logger(f"    {ch.upper()}: mean_std A={ma:.4f}, B={mb:.4f}, imp={imp:+.1f}%")
+
+    logger("  Per-voltage:")
+    for v in VOLTAGE_ORDER:
+        if v in per_voltage_results:
+            ma = per_voltage_results[v]['path_a']['grand_mean_std']
+            mb = per_voltage_results[v]['path_b']['grand_mean_std']
+            imp = (ma - mb) / (ma + 1e-10) * 100
+            logger(f"    {v}V: mean_std A={ma:.4f}, B={mb:.4f}, imp={imp:+.1f}%")
+
+    # ---------- 打印新指标：逐 sensor 模值重复性 ----------
+    logger("")
+    logger("Within-Sensor Magnitude Repeatability (std of |b| across rows, per sensor)")
+    logger("=" * 80)
+    logger(f"  {'Sensor':<12} {'Path A (Raw)':>15} {'Path B (Full)':>15} {'Improvement':>12}")
+    logger(f"  {'-' * 60}")
+    improvements = []
+    for sid in range(1, n_sensors + 1):
+        sid_key = f"sensor_{sid}"
+        if sid_key in per_sensor_agg:
+            ma = per_sensor_agg[sid_key]['path_a']
+            mb = per_sensor_agg[sid_key]['path_b']
+            imp = (ma - mb) / (ma + 1e-10) * 100
+            improvements.append(imp)
+            logger(f"  {sid_key:<12} {ma:>15.6f} {mb:>15.6f} {imp:>+11.1f}%")
+    logger(f"  {'-' * 60}")
+    if improvements:
+        logger(f"  {'Mean improvement:':<12} {np.mean(improvements):>+11.1f}%  "
+               f"(Path A mean={grand_mag_std['path_a']:.4f}, Path B mean={grand_mag_std['path_b']:.4f})")
+    logger("=" * 80)
+    logger("")
+    logger("  Per-sensor, per-channel, per-voltage magnitude std detail:")
+    for sid in range(1, n_sensors + 1):
+        sid_key = f"sensor_{sid}"
+        logger(f"    --- {sid_key} ---")
+        for ch in channels:
+            if ch in per_sensor_mag_std.get(sid_key, {}):
+                for v in VOLTAGE_ORDER:
+                    if v in per_sensor_mag_std[sid_key][ch]:
+                        ma = per_sensor_mag_std[sid_key][ch][v]['path_a']
+                        mb = per_sensor_mag_std[sid_key][ch][v]['path_b']
+                        imp = (ma - mb) / (ma + 1e-10) * 100
+                        logger(f"      {ch.upper()} @ {v}V: raw={ma:.4f}, calib={mb:.4f}, imp={imp:+.1f}%")
+    logger("=" * 80)
+
+    logger("")
+    logger("=" * 60)
+
+    return result
 
 
 def main():

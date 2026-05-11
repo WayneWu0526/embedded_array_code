@@ -18,101 +18,115 @@ import math
 import glob
 import os
 import json
-import csv
 import numpy as np
-from std_msgs.msg import Header, Float32MultiArray, Empty
+from std_msgs.msg import Header, Float32MultiArray, Bool, String
+from datetime import datetime
 from serial_processor.msg import SensorData, StmUplink, StmDownlink
 from sensor_array_config import get_config, SensorArrayConfig
-from calibration.forward import CalibrationProcessor
 
 
-class ManualCaptureModule:
-    """Subscribes to trigger topic, collects N samples of corrected stm_uplink, averages, saves to CSV."""
+class ManualRecorder:
+    """Records raw stm_uplink data to CSV on trigger."""
 
-    SENSOR_COUNT = 12
+    STATE_IDLE = 'idle'
+    STATE_RECORDING = 'recording'
+    STATE_PAUSED = 'paused'
 
-    def __init__(self, output_filename, sample_count=10):
-        """
-        Args:
-            output_filename: CSV filename (not full path). Saved to serial_processor/data/.
-            sample_count: Number of samples to average (default 10).
-        """
-        self._sample_count = sample_count
-        self._buffer = []  # list of stm_uplink messages
-        self._lock = threading.Lock()
-        self._capturing = False
+    def __init__(self, output_dir, frames_to_average, n_sensors=12):
+        self.output_dir = output_dir
+        self.frames_to_average = frames_to_average
+        self.n_sensors = n_sensors
+        self._state = self.STATE_IDLE
+        self._file = None
+        self._buffer = []  # list of StmUplink messages
+        self._csv_path = None
+        if self.frames_to_average <= 0:
+            raise ValueError("frames_to_average must be positive")
 
-        # Resolve output path: ~/embedded_array_ws/src/serial_processor/data/<filename>
-        ws_root = os.path.expanduser('~/embedded_array_ws/src/serial_processor')
-        self._data_dir = os.path.join(ws_root, 'data')
-        os.makedirs(self._data_dir, exist_ok=True)
-        self._output_path = os.path.join(self._data_dir, output_filename)
+    @property
+    def state(self):
+        return self._state
 
-        # Ensure CSV header exists
-        if not os.path.exists(self._output_path):
-            header = ['timestamp'] + [
-                f'sensor_{i}_x,sensor_{i}_y,sensor_{i}_z'
-                for i in range(1, self.SENSOR_COUNT + 1)
-            ]
-            with open(self._output_path, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(','.join(header).split(','))  # split to flatten
+    def _write_header(self, f):
+        header = []
+        for i in range(1, self.n_sensors + 1):
+            header.extend([f'sensor_{i}_x', f'sensor_{i}_y', f'sensor_{i}_z'])
+        f.write(','.join(header) + '\n')
 
-        # Subscribers
-        self._trigger_sub = rospy.Subscriber(
-            '/manual_capture/trigger', Empty, self._on_trigger
-        )
-        self._uplink_sub = rospy.Subscriber(
-            'stm_uplink', StmUplink, self._on_uplink
-        )
+    def _average_buffer(self):
+        """Compute per-sensor average from buffered StmUplink messages."""
+        if not self._buffer:
+            return None
+        n = len(self._buffer)
+        sum_x = [0.0] * self.n_sensors
+        sum_y = [0.0] * self.n_sensors
+        sum_z = [0.0] * self.n_sensors
+        for msg in self._buffer:
+            for idx, s in enumerate(msg.sensor_data):
+                sum_x[idx] += s.x
+                sum_y[idx] += s.y
+                sum_z[idx] += s.z
+        avg = [0.0] * self.n_sensors
+        for i in range(self.n_sensors):
+            avg[i] = (sum_x[i] / n, sum_y[i] / n, sum_z[i] / n)
+        timestamp = self._buffer[-1].timestamp
+        self._buffer.clear()
+        return timestamp, avg
 
-        rospy.loginfo(
-            f"ManualCaptureModule: output={self._output_path}, samples={sample_count}"
-        )
+    def trigger(self, enable):
+        """Handle trigger message."""
+        if enable:
+            self._start_recording()
+        else:
+            self._pause_recording()
 
-    def _on_trigger(self, _msg):
-        """Reset buffer and start collecting."""
-        with self._lock:
-            self._buffer = []
-            self._capturing = True
-        rospy.loginfo("ManualCapture: trigger received, collecting samples...")
-
-    def _on_uplink(self, msg):
-        """Buffer messages while capturing."""
-        with self._lock:
-            if not self._capturing:
+    def _start_recording(self):
+        if self._state == self.STATE_IDLE:
+            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+            self._csv_path = os.path.join(self.output_dir, f'manual_record_{ts}.csv')
+            try:
+                self._file = open(self._csv_path, 'w')
+                self._write_header(self._file)
+                rospy.loginfo(f"[ManualRecorder] Recording started: {self._csv_path}")
+            except IOError as e:
+                rospy.logerr(f"[ManualRecorder] Failed to open file for writing: {e}")
+                self._state = self.STATE_IDLE
                 return
-            self._buffer.append(msg)
-            if len(self._buffer) >= self._sample_count:
-                self._write_average()
-                self._capturing = False
-                self._buffer = []
+        self._state = self.STATE_RECORDING
 
-    def _write_average(self):
-        """Compute per-sensor averages and append to CSV."""
-        with self._lock:
-            if not self._buffer:
-                return
-            # buffer: list of StmUplink, each has sensor_data[0..11]
-            # Build per-sensor accumulators
-            sums = [[0.0, 0.0, 0.0] for _ in range(self.SENSOR_COUNT)]
-            for uplink_msg in self._buffer:
-                for idx, sd in enumerate(uplink_msg.sensor_data):
-                    sums[idx][0] += sd.x
-                    sums[idx][1] += sd.y
-                    sums[idx][2] += sd.z
-            avg = [
-                [s[0] / len(self._buffer), s[1] / len(self._buffer), s[2] / len(self._buffer)]
-                for s in sums
-            ]
-            # Timestamp
-            from datetime import datetime
-            ts = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
-            row = [ts] + [coord for sensor_avg in avg for coord in sensor_avg]
-            with open(self._output_path, 'a', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(row)
-            rospy.loginfo(f"ManualCapture: wrote {len(self._buffer)} samples to {self._output_path}")
+    def _pause_recording(self):
+        if self._state == self.STATE_RECORDING:
+            self._buffer.clear()
+            self._state = self.STATE_PAUSED
+            rospy.loginfo("[ManualRecorder] Recording paused")
+
+    def on_uplink_raw(self, msg):
+        """Process incoming stm_uplink_raw message. Returns True if row was written."""
+        if self._state != self.STATE_RECORDING:
+            return False
+        self._buffer.append(msg)
+        if len(self._buffer) >= self.frames_to_average:
+            result = self._average_buffer()
+            if result is None:
+                return False
+            timestamp, avg = result
+            row = []
+            for (x, y, z) in avg:
+                row.extend([f'{x:.6f}', f'{y:.6f}', f'{z:.6f}'])
+            self._file.write(','.join(row) + '\n')
+            return True
+        return False
+
+    def flush_and_close(self):
+        """Flush and close file. Called on shutdown."""
+        if self._file:
+            self._file.flush()
+            os.fsync(self._file.fileno())
+            self._file.close()
+            self._file = None
+        self._buffer.clear()
+        self._state = self.STATE_IDLE
+        rospy.loginfo("[ManualRecorder] File closed")
 
 
 class SerialNodeTDM:
@@ -138,14 +152,17 @@ class SerialNodeTDM:
         self._adu_to_gs = self._sensor_config.manifest.adu_to_gs
         rospy.loginfo(f"Using sensor type: {self._sensor_type}")
 
-        # Calibration processor (ellipsoid + R_CORR + consistency)
-        self._calib = CalibrationProcessor(self._sensor_config)
+        # Manual record parameters
+        self.output_dir = os.path.expanduser(rospy.get_param('~output_dir', '~/embedded_array_ws/src/sensor_data_collection/data'))
+        self.frames_to_average = int(rospy.get_param('~frames_to_average', 10))
+        os.makedirs(self.output_dir, exist_ok=True)
+        rospy.loginfo(f"Manual record output directory: {self.output_dir}")
 
         # Serial connection
         self.ser = None
         self.connect()
 
-        # Publisher for uplink data (fully corrected: ellipsoid + R_CORR + consistency)
+        # Publisher for uplink data (fully corrected: R_CORR + normalized D_i, e_i)
         self.pub = rospy.Publisher('stm_uplink', StmUplink, queue_size=100)
         # Publisher for raw uplink data (uncorrected, for archive/Phase 2 calibration)
         self.pub_raw = rospy.Publisher('stm_uplink_raw', StmUplink, queue_size=100)
@@ -154,17 +171,36 @@ class SerialNodeTDM:
         # Publisher for raw magnetic field magnitude (uncorrected)
         self.pub_magnitude_raw = rospy.Publisher('stm_magnitude_raw', Float32MultiArray, queue_size=100)
 
+        # Load R_CORR rotation correction matrices
+        self._load_sensor_array_params()
+        # Load normalized calibration D_i, e_i from sensor config
+        norm = self._sensor_config.normalized
+        self.D_matrix = {}
+        self.e_bias = {}
+        for sid, params in norm.params.items():
+            self.D_matrix[sid] = np.array(params.D_i)
+            self.e_bias[sid] = np.array(params.e_i)
+        rospy.loginfo(f"Loaded normalized calibration for {len(self.D_matrix)} sensors from config")
+
+        # Initialize manual recorder
+        self.recorder = ManualRecorder(self.output_dir, self.frames_to_average)
+        # Subscribe to own stm_uplink_raw for recording (self-subscribe)
+        self.sub_record = rospy.Subscriber('stm_uplink_raw', StmUplink, self._on_uplink_raw_record)
+        # Subscribe to trigger
+        self.sub_trigger = rospy.Subscriber('~record_trigger', Bool, self._on_record_trigger)
+        # Status publisher
+        self.pub_status = rospy.Publisher('stm_manual_record/status', String, queue_size=10)
+
         # Subscriber for downlink commands
         self.sub = rospy.Subscriber('stm_downlink', StmDownlink, self._downlink_callback)
-
-        # Manual capture module
-        capture_filename = rospy.get_param('~capture_output_filename', 'manual_capture.csv')
-        self._capture = ManualCaptureModule(capture_filename, sample_count=10)
 
         rospy.loginfo(
             f"SerialNodeTDM initialized: {self.port} at {self.baudrate} baud, "
             f"sensor_float_endian={self.float_endian_name}"
         )
+
+        # Register shutdown handler
+        rospy.on_shutdown(self._on_shutdown_record)
 
     def _resolve_serial_port(self, configured_port):
         """
@@ -189,6 +225,51 @@ class SerialNodeTDM:
             rospy.logwarn("No /dev/ttyACM* device found, fallback to /dev/ttyACM")
 
         return port
+
+    def _load_sensor_array_params(self):
+        """Load d_list and R_CORR from SensorArrayConfig."""
+        try:
+            hw = self._sensor_config.hardware
+            self._d_list = np.array(hw.d_list)
+            manifest = self._sensor_config.manifest
+            self._n_sensors = manifest.n_sensors
+            self._n_groups = manifest.n_groups
+            self._sensors_per_group = manifest.sensors_per_group
+            # Build R_CORR dict: sensor_id -> np.array(3x3)
+            # Each R_CORR entry has sensor_ids and a 9-element matrix
+            self.R_CORR = {}
+            for entry in hw.R_CORR:
+                mat = np.array(entry.matrix).reshape(3, 3, order='F')
+                for sid in entry.sensor_ids:
+                    self.R_CORR[sid] = mat
+            rospy.loginfo(f"Loaded sensor array params: {self._n_sensors} sensors, {self._n_groups} groups")
+        except Exception as e:
+            rospy.logwarn(f"Failed to load sensor array params: {e}")
+            # Fallback: will use empty configs
+            self._d_list = np.array([])
+            self._n_sensors = 0
+            self._n_groups = 0
+            self._sensors_per_group = 0
+            self.R_CORR = {}
+
+        # Build sensor -> group lookup (group index is position in R_CORR list)
+        self._sensor_to_group = {}
+        for idx, entry in enumerate(hw.R_CORR):
+            for sid in entry.sensor_ids:
+                self._sensor_to_group[sid] = idx + 1
+
+    def _on_record_trigger(self, msg):
+        """Handle record trigger (Bool)."""
+        enable = msg.data
+        self.recorder.trigger(enable)
+        self.pub_status.publish(String(data=self.recorder.state))
+
+    def _on_uplink_raw_record(self, msg):
+        """Process stm_uplink_raw for recording."""
+        self.recorder.on_uplink_raw(msg)
+
+    def _on_shutdown_record(self):
+        self.recorder.flush_and_close()
 
     def connect(self):
         try:
@@ -367,10 +448,18 @@ class SerialNodeTDM:
                             raw_magnitudes.data = [math.sqrt(s.x**2 + s.y**2 + s.z**2) for s in msg.sensor_data]
                             self.pub_magnitude_raw.publish(raw_magnitudes)
 
-                            # Apply full correction: ellipsoid + R_CORR + consistency
+                            # Apply correction: R_CORR + normalized D_i, e_i
                             corrected_sensors = []
                             for s in msg.sensor_data:
-                                cx, cy, cz = self._calib.apply(s.id, s.x, s.y, s.z)
+                                cx, cy, cz = s.x, s.y, s.z
+                                # Apply R_CORR rotation (transform from sensor-local to reference frame)
+                                if s.id in self.R_CORR:
+                                    b_rot = self.R_CORR[s.id] @ np.array([cx, cy, cz])
+                                    cx, cy, cz = b_rot[0], b_rot[1], b_rot[2]
+                                # Apply normalized calibration: D_i * b + e_i
+                                if s.id in self.D_matrix and s.id in self.e_bias:
+                                    b_cons = self.D_matrix[s.id] @ np.array([cx, cy, cz]) + self.e_bias[s.id]
+                                    cx, cy, cz = b_cons[0], b_cons[1], b_cons[2]
                                 corrected_sensors.append(SensorData(id=s.id, x=cx, y=cy, z=cz))
 
                             # Create corrected message

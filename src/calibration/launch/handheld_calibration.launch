@@ -5,13 +5,29 @@
         Manual data collection without robot arm.
         Simply hold the sensor and move slowly by hand.
 
+        Two independent switches:
+            skip_sampling: bypass data collection, use existing CSV
+            skip_calibration: only evaluate, don't compute/save params
+
         Usage:
+            # Collect + fit + evaluate + save params (default)
             roslaunch calibration handheld_calibration.launch
+
+            # Collect + evaluate only (no fitting, no save)
+            roslaunch calibration handheld_calibration.launch skip_calibration:=true
+
+            # Existing CSV → fit + evaluate + save params
+            roslaunch calibration handheld_calibration.launch skip_sampling:=true csv_path:=path/to/data.csv
+
+            # Existing CSV → evaluate only
+            roslaunch calibration handheld_calibration.launch skip_sampling:=true skip_calibration:=true csv_path:=path/to/data.csv
     -->
 
     <!-- Arguments -->
     <arg name="sensor_type" default="QMC6309"/>
     <arg name="skip_sampling" default="false"/>
+    <arg name="skip_calibration" default="false"/>
+    <arg name="csv_path" default=""/>
 
     <!-- Start STM32 and sensor data collection (manual mode - no FY8300) -->
     <include file="$(find sensor_data_collection)/launch/stm32_manual.launch">
@@ -22,6 +38,10 @@
         Handheld calibration sampler parameters:
 
         samples_per_avg: Number of samples to average per CSV row (default: 10)
+        max_samples: Maximum number of samples to collect (default: 500)
+        skip_sampling: Skip data collection, use existing CSV (default: false)
+        skip_calibration: Only evaluate, don't compute/save params (default: false)
+        csv_path: Path to CSV file (required when skip_sampling=true)
     -->
     <node
         name="handheld_calibration_sampler"
@@ -34,6 +54,8 @@
         <param name="max_samples" value="500"/>
         <param name="sensor_type" value="$(arg sensor_type)"/>
         <param name="skip_sampling" value="$(arg skip_sampling)"/>
+        <param name="skip_calibration" value="$(arg skip_calibration)"/>
+        <param name="csv_path" value="$(arg csv_path)"/>
     </node>
 
 </launch>
