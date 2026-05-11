@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Calibration fitting variant: normalize b_ref magnitude per (channel, voltage).
+Normalized calibration fitting for sensor array.
 
-For each config:
+For each (channel, voltage) config:
   - b_ref_norm[n] = b_ref[n] * (mean |b_ref| / |b_ref[n]|)
-  - Fit D*b_corr + e = b_ref_norm
-  - Evaluate against both b_ref_norm (training fit) and b_ref (fair comparison)
+  - Fit D*b_corr + e = b_ref_norm  per sensor
+  - Output: normalized_params.json with D_i, e_i per sensor
 
-Comparison output: residual_std_normalized.csv vs residual_std_table.csv
+Pipeline: b_raw -> R_CORR -> D_i@bcorr + e_i -> b_corrected
 """
 
 import numpy as np
