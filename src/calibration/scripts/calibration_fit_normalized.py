@@ -188,9 +188,15 @@ def main():
     print(f"  post (norm train, vs norm b_ref): {df['post_norm_train'].mean():.6f}")
 
     # Save normalized calibration JSON
-    cal_out = Path(base_dir) / 'calibration_results_normalized.json'
+    cal_out = Path('/home/zhang/embedded_array_ws/src/sensor_array_config/sensor_array_config/config/qmc6309/normalized_params.json')
+    output = {}
+    for sid, params in results_norm.items():
+        output[str(sid)] = {
+            'D_i': params['D'],
+            'e_i': params['e']
+        }
     with open(cal_out, 'w') as f:
-        json.dump({str(k): v for k, v in results_norm.items()}, f, indent=2)
+        json.dump(output, f, indent=2)
     print(f"Calibration JSON saved to {cal_out}")
 
 
