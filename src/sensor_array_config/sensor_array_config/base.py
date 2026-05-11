@@ -98,6 +98,37 @@ class ConsistencyParamsSet:
         with open(path, "w") as f:
             json.dump(raw, f, indent=2)
 
+# ---------- normalized params (Phase 2 variant: trained on b_ref_norm) ----------
+@dataclass
+class NormalizedParamsSet:
+    params: Dict[int, ConsistencyParams]  # reuses D_i, e_i from ConsistencyParams
+
+    @classmethod
+    def from_json(cls, path: str) -> "NormalizedParamsSet":
+        with open(path) as f:
+            raw = json.load(f)
+        params = {}
+        if "sensors" in raw:
+            for entry in raw["sensors"]:
+                params[entry["sensor_id"]] = ConsistencyParams(
+                    D_i=entry["D_i"],
+                    e_i=entry["e_i"]
+                )
+        else:
+            for sid, entry in raw.items():
+                if sid == "amp_factor":
+                    continue
+                params[int(sid)] = ConsistencyParams(
+                    D_i=entry["D_i"],
+                    e_i=entry["e_i"]
+                )
+        return cls(params=params)
+
+    def to_json(self, path: str):
+        raw = {str(k): {"D_i": v.D_i, "e_i": v.e_i} for k, v in self.params.items()}
+        with open(path, "w") as f:
+            json.dump(raw, f, indent=2)
+
 # ---------- sensor array hardware params ----------
 @dataclass
 class RCorrEntry:
@@ -169,6 +200,11 @@ class SensorArrayConfig(ABC):
     @property
     @abstractmethod
     def consistency(self) -> ConsistencyParamsSet:
+        ...
+
+    @property
+    @abstractmethod
+    def normalized(self) -> NormalizedParamsSet:
         ...
 
     @property
