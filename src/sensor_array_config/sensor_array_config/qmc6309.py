@@ -1,7 +1,7 @@
 import os
 from .base import (
     SensorArrayConfig, SensorArrayManifest,
-    IntrinsicParamsSet, ConsistencyParamsSet, SensorArrayHardwareParams
+    IntrinsicParamsSet, ConsistencyParamsSet, NormalizedParamsSet, SensorArrayHardwareParams
 )
 
 _QMC6309_ROOT = os.path.join(os.path.dirname(__file__), "config", "qmc6309")
@@ -35,6 +35,12 @@ class QMC6309Config(SensorArrayConfig):
     def consistency(self) -> ConsistencyParamsSet:
         return ConsistencyParamsSet.from_json(
             os.path.join(self._config_root, "consistency_params.json")
+        )
+
+    @property
+    def normalized(self) -> NormalizedParamsSet:
+        return NormalizedParamsSet.from_json(
+            os.path.join(self._config_root, "normalized_params.json")
         )
 
     @property
