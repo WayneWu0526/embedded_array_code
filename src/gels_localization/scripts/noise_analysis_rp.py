@@ -34,7 +34,7 @@ from plot_noise_analysis import plot_errors
 
 
 # Fixed noise level (Gs)
-FIXED_NOISE_LEVEL = 0
+FIXED_NOISE_LEVEL = 0.005
 
 # Offset sweep: single level at 0 (no offset bias, only base noise 0.01 Gs)
 OFFSET_LEVELS = [0.0]
