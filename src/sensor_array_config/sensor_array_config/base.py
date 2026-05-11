@@ -19,84 +19,13 @@ class SensorArrayManifest:
     def __post_init__(self):
         self.adu_to_gs = self.range_gs / (2 ** (self.bit_width - 1))
 
-# ---------- intrinsic params (Phase 1) ----------
-@dataclass
-class IntrinsicParams:
-    o_i: List[float]
-    C_i: List[List[float]]
-
-@dataclass
-class IntrinsicParamsSet:
-    params: Dict[int, IntrinsicParams]
-
-    @classmethod
-    def from_json(cls, path: str) -> "IntrinsicParamsSet":
-        with open(path) as f:
-            raw = json.load(f)
-        params = {}
-        # New format: {"sensors": [{"sensor_id": 1, "o_i": [...], "C_i": [...]}, ...]}
-        if "sensors" in raw:
-            for entry in raw["sensors"]:
-                params[entry["sensor_id"]] = IntrinsicParams(
-                    o_i=entry["o_i"],
-                    C_i=entry["C_i"]
-                )
-        # Old format: {"1": {"o_i": [...], "C_i": [...]}, ...}
-        else:
-            for sid, entry in raw.items():
-                params[int(sid)] = IntrinsicParams(
-                    o_i=entry["o_i"],
-                    C_i=entry["C_i"]
-                )
-        return cls(params=params)
-
-    def to_json(self, path: str):
-        raw = {str(k): {"o_i": v.o_i, "C_i": v.C_i} for k, v in self.params.items()}
-        with open(path, "w") as f:
-            json.dump(raw, f, indent=2)
-
 # ---------- consistency params (Phase 2) ----------
+# NOTE: Kept because NormalizedParamsSet reuses ConsistencyParams in its type annotation.
+# Once NormalizedParamsSet is updated to use its own type, this can be removed.
 @dataclass
 class ConsistencyParams:
     D_i: List[List[float]]
     e_i: List[float]
-
-@dataclass
-class ConsistencyParamsSet:
-    params: Dict[int, ConsistencyParams]
-    amp_factor: Optional[float] = None  # 统一缩放因子 (方案B)
-
-    @classmethod
-    def from_json(cls, path: str) -> "ConsistencyParamsSet":
-        with open(path) as f:
-            raw = json.load(f)
-        params = {}
-        amp_factor = raw.get("amp_factor")  # 尝试读取 amp_factor
-
-        # New format: {"sensors": [{"sensor_id": 1, "D_i": [...], "e_i": [...]}, ...], "amp_factor": 1.5}
-        if "sensors" in raw:
-            for entry in raw["sensors"]:
-                params[entry["sensor_id"]] = ConsistencyParams(
-                    D_i=entry["D_i"],
-                    e_i=entry["e_i"]
-                )
-        # Old format: {"1": {"D_i": [...], "e_i": [...]}, ...}
-        else:
-            for sid, entry in raw.items():
-                if sid == "amp_factor":
-                    continue
-                params[int(sid)] = ConsistencyParams(
-                    D_i=entry["D_i"],
-                    e_i=entry["e_i"]
-                )
-        return cls(params=params, amp_factor=amp_factor)
-
-    def to_json(self, path: str):
-        raw = {str(k): {"D_i": v.D_i, "e_i": v.e_i} for k, v in self.params.items()}
-        if self.amp_factor is not None:
-            raw["amp_factor"] = self.amp_factor
-        with open(path, "w") as f:
-            json.dump(raw, f, indent=2)
 
 # ---------- normalized params (Phase 2 variant: trained on b_ref_norm) ----------
 @dataclass
@@ -190,16 +119,6 @@ class SensorArrayConfig(ABC):
     @property
     @abstractmethod
     def manifest(self) -> SensorArrayManifest:
-        ...
-
-    @property
-    @abstractmethod
-    def intrinsic(self) -> IntrinsicParamsSet:
-        ...
-
-    @property
-    @abstractmethod
-    def consistency(self) -> ConsistencyParamsSet:
         ...
 
     @property
