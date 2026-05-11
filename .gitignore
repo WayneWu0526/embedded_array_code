@@ -39,4 +39,5 @@ report/
 src/serial_processor/config/*.json
 
 # Also protect sensor_data_collection results
-src/sensor_data_collection/result/
+src/sensor_data_collection/result/.worktrees
+.worktrees/
