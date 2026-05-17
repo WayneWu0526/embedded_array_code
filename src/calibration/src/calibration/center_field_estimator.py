@@ -158,12 +158,19 @@ class CenterFieldEstimator:
 
         Returns:
             b_hats: (N, 3) center field estimates
+            b_corr: (N, N_selected, 3) R_CORR-corrected sensor readings (intermediate)
         """
         if b_raw.ndim == 2 and b_raw.shape[1] == 36:
             b_raw = b_raw.reshape(b_raw.shape[0], 12, 3)
 
         N = b_raw.shape[0]
+        N_sel = len(self.sensor_ids)
         b_hats = np.zeros((N, 3))
+        b_corr = np.zeros((N, N_sel, 3))
         for i in range(N):
-            b_hats[i] = self.estimate_from_row(b_raw[i])
-        return b_hats
+            b_raw_filtered = self._filter_to_selected_sensors(b_raw[i])
+            b_rcorr = self.apply_r_corr(b_raw_filtered)
+            b_corr[i] = b_rcorr
+            B_meas = b_rcorr.T  # (3, N_selected)
+            b_hats[i] = (B_meas @ self.w).ravel()
+        return b_hats, b_corr

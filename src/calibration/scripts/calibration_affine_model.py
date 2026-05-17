@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Normalized calibration fitting for sensor array.
+Affine model calibration for sensor array.
+
+Per-sensor model:  b_corrected = D_i @ b_corr + e_i
 
 For each (channel, voltage) config:
   - b_ref_norm[n] = b_ref[n] * (mean |b_ref| / |b_ref[n]|)
-  - Fit D*b_corr + e = b_ref_norm  per sensor
-  - Output: normalized_params.json with D_i, e_i per sensor
+  - Fit D_i @ b_corr + e_i = b_ref_norm  per sensor
+  - Output: affine_model_params.json with D_i, e_i per sensor
 
-Pipeline: b_raw -> R_CORR -> D_i@bcorr + e_i -> b_corrected
+Pipeline: b_raw -> R_CORR -> D_i @ b_corr + e_i -> b_corrected
 """
 
 import numpy as np
@@ -17,7 +19,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, '/home/zhang/embedded_array_ws/src')
-from calibration.lib.center_field_estimator import CenterFieldEstimator
+from calibration.src.calibration.center_field_estimator import CenterFieldEstimator
 
 
 def solve_per_sensor(b_corr_all, b_ref_all):
@@ -78,7 +80,6 @@ def delta_o_pre(b_raw_rs, est):
 
 def main():
     base_dir = '/home/zhang/embedded_array_ws/src/sensor_data_collection/data'
-    cleaned_dir = Path(base_dir) / 'cleaned_aggressive'
     channels = ['manual_x', 'manual_y', 'manual_z']
     voltages = ['1', '2', '3', '4', '5']
     est = CenterFieldEstimator()
@@ -87,20 +88,21 @@ def main():
     configs = {}
     for ch in channels:
         for v in voltages:
-            csv_path = cleaned_dir / f'{ch}_{v}V_cleaned.csv'
+            csv_path = Path(base_dir) / ch / f'manual_record_{v}V.csv'
             if not csv_path.exists():
                 continue
             df = pd.read_csv(csv_path)
             b_raw = df.values.astype(np.float64)
             N = b_raw.shape[0]
             b_raw_rs = b_raw.reshape(-1, 12, 3)
-            b_ref = est.estimate_batch(b_raw)
+            b_ref, b_corr = est.estimate_batch(b_raw)
             mag = np.linalg.norm(b_ref, axis=1)
             mean_mag = mag.mean()
             b_ref_norm = b_ref * (mean_mag / mag[:, None])
             configs[(ch, v)] = {
                 'b_raw_rs': b_raw_rs, 'b_ref': b_ref,
-                'b_ref_norm': b_ref_norm, 'mean_mag': mean_mag, 'N': N,
+                'b_ref_norm': b_ref_norm, 'b_corr': b_corr,
+                'mean_mag': mean_mag, 'N': N,
             }
             print(f"  {ch}/{v}V: N={N}, mean_mag={mean_mag:.4f}")
 
@@ -108,23 +110,20 @@ def main():
     all_b_raw_rs   = np.concatenate([v['b_raw_rs']    for v in configs.values()], axis=0)
     all_b_ref      = np.concatenate([v['b_ref']       for v in configs.values()], axis=0)
     all_b_ref_norm = np.concatenate([v['b_ref_norm']  for v in configs.values()], axis=0)
+    all_b_corr     = np.concatenate([v['b_corr']      for v in configs.values()], axis=0)
 
-    # Apply R_CORR
-    N_total = all_b_raw_rs.shape[0]
-    b_corr_all = np.zeros_like(all_b_raw_rs)
-    for n in range(N_total):
-        filtered = est._filter_to_selected_sensors(all_b_raw_rs[n])
-        b_corr_all[n] = est.apply_r_corr(filtered)
+    # R_CORR applied exactly once inside estimate_batch() for both b_ref and b_corr.
+    # b_corr_all reuses the same intermediate R_CORR-corrected data instead of recomputing.
 
     # ── Fit with NORMALIZED b_ref ─────────────────────────────────────────────
-    print("\n=== Fitting with normalized b_ref ===")
-    results_norm = solve_per_sensor(b_corr_all, all_b_ref_norm)
+    print("\n=== Fitting affine model with normalized b_ref ===")
+    results_norm = solve_per_sensor(all_b_corr, all_b_ref_norm)
     D_arr_norm = np.array([results_norm[s]['D'] for s in range(1, 13)])
     e_arr_norm = np.array([results_norm[s]['e'] for s in range(1, 13)]).squeeze()
 
     # ── Fit with ORIGINAL b_ref (for comparison baseline) ─────────────────────
     print("=== Fitting with original b_ref ===")
-    results_orig = solve_per_sensor(b_corr_all, all_b_ref)
+    results_orig = solve_per_sensor(all_b_corr, all_b_ref)
     D_arr_orig = np.array([results_orig[s]['D'] for s in range(1, 13)])
     e_arr_orig = np.array([results_orig[s]['e'] for s in range(1, 13)]).squeeze()
 
@@ -147,10 +146,10 @@ def main():
             # Post with original calibration (trained on original b_ref)
             d_post_orig = delta_o_per_row(b_raw_rs, est, D_arr_orig, e_arr_orig, b_ref_cfg)
 
-            # Post with normalized calibration evaluated against ORIGINAL b_ref (fair comparison)
+            # Post with affine calibration evaluated against ORIGINAL b_ref (fair comparison)
             d_post_norm_fair = delta_o_per_row(b_raw_rs, est, D_arr_norm, e_arr_norm, b_ref_cfg)
 
-            # Post with normalized calibration evaluated against NORMALIZED b_ref (training metric)
+            # Post with affine calibration evaluated against NORMALIZED b_ref (training metric)
             d_post_norm_train = delta_o_per_row(b_raw_rs, est, D_arr_norm, e_arr_norm, b_ref_norm_cfg)
 
             rows.append({
@@ -175,10 +174,10 @@ def main():
 
     df = pd.DataFrame(rows)
 
-    # Save comparison CSV
-    out_path = Path(__file__).parent.parent / 'data' / 'residual_std_normalized.csv'
-    df.to_csv(out_path, index=False)
-    print(f"\nSaved to {out_path}")
+    # Save comparison CSV (optional diagnostic output)
+    # out_path = Path(__file__).parent.parent / 'data' / 'residual_std_normalized.csv'
+    # df.to_csv(out_path, index=False)
+    # print(f"\nSaved to {out_path}")
 
     # Summary
     print("\n=== Overall mean Delta_o ===")
@@ -187,13 +186,13 @@ def main():
     print(f"  post (norm fair, vs orig b_ref): {df['post_norm_fair'].mean():.6f}")
     print(f"  post (norm train, vs norm b_ref): {df['post_norm_train'].mean():.6f}")
 
-    # Save normalized calibration JSON
-    cal_out = Path('/home/zhang/embedded_array_ws/src/sensor_array_config/sensor_array_config/config/qmc6309/normalized_params.json')
+    # Save affine calibration JSON
+    cal_out = Path('/home/zhang/embedded_array_ws/src/sensor_array_config/sensor_array_config/config/qmc6309/affine_model_params.json')
     output = {}
     for sid, params in results_norm.items():
         output[str(sid)] = {
             'D_i': params['D'],
-            'e_i': params['e']
+            'e_i': list(np.array(params['e']).flatten())
         }
     with open(cal_out, 'w') as f:
         json.dump(output, f, indent=2)

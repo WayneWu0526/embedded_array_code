@@ -1,7 +1,7 @@
 import os
 from .base import (
     SensorArrayConfig, SensorArrayManifest,
-    NormalizedParamsSet, SensorArrayHardwareParams
+    AffineModelParamsSet, SensorArrayHardwareParams
 )
 
 _QMC6309_ROOT = os.path.join(os.path.dirname(__file__), "config", "qmc6309")
@@ -26,9 +26,9 @@ class QMC6309Config(SensorArrayConfig):
         )
 
     @property
-    def normalized(self) -> NormalizedParamsSet:
-        return NormalizedParamsSet.from_json(
-            os.path.join(self._config_root, "normalized_params.json")
+    def affine_model(self) -> AffineModelParamsSet:
+        return AffineModelParamsSet.from_json(
+            os.path.join(self._config_root, "affine_model_params.json")
         )
 
     @property

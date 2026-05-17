@@ -20,20 +20,19 @@ class SensorArrayManifest:
         self.adu_to_gs = self.range_gs / (2 ** (self.bit_width - 1))
 
 # ---------- consistency params (Phase 2) ----------
-# NOTE: Kept because NormalizedParamsSet reuses ConsistencyParams in its type annotation.
-# Once NormalizedParamsSet is updated to use its own type, this can be removed.
+# NOTE: Kept because AffineModelParamsSet reuses ConsistencyParams in its type annotation.
 @dataclass
 class ConsistencyParams:
     D_i: List[List[float]]
     e_i: List[float]
 
-# ---------- normalized params (Phase 2 variant: trained on b_ref_norm) ----------
+# ---------- affine model params ----------
 @dataclass
-class NormalizedParamsSet:
+class AffineModelParamsSet:
     params: Dict[int, ConsistencyParams]  # reuses D_i, e_i from ConsistencyParams
 
     @classmethod
-    def from_json(cls, path: str) -> "NormalizedParamsSet":
+    def from_json(cls, path: str) -> "AffineModelParamsSet":
         with open(path) as f:
             raw = json.load(f)
         params = {}
@@ -123,7 +122,7 @@ class SensorArrayConfig(ABC):
 
     @property
     @abstractmethod
-    def normalized(self) -> NormalizedParamsSet:
+    def affine_model(self) -> AffineModelParamsSet:
         ...
 
     @property

@@ -162,7 +162,7 @@ class SerialNodeTDM:
         self.ser = None
         self.connect()
 
-        # Publisher for uplink data (fully corrected: R_CORR + normalized D_i, e_i)
+        # Publisher for uplink data (fully corrected: R_CORR + affine D_i, e_i)
         self.pub = rospy.Publisher('stm_uplink', StmUplink, queue_size=100)
         # Publisher for raw uplink data (uncorrected, for archive/Phase 2 calibration)
         self.pub_raw = rospy.Publisher('stm_uplink_raw', StmUplink, queue_size=100)
@@ -173,14 +173,14 @@ class SerialNodeTDM:
 
         # Load R_CORR rotation correction matrices
         self._load_sensor_array_params()
-        # Load normalized calibration D_i, e_i from sensor config
-        norm = self._sensor_config.normalized
+        # Load affine model calibration D_i, e_i from sensor config
+        affine = self._sensor_config.affine_model
         self.D_matrix = {}
         self.e_bias = {}
-        for sid, params in norm.params.items():
+        for sid, params in affine.params.items():
             self.D_matrix[sid] = np.array(params.D_i)
-            self.e_bias[sid] = np.array(params.e_i)
-        rospy.loginfo(f"Loaded normalized calibration for {len(self.D_matrix)} sensors from config")
+            self.e_bias[sid] = np.array(params.e_i).squeeze()
+        rospy.loginfo(f"Loaded affine model calibration for {len(self.D_matrix)} sensors from config")
 
         # Initialize manual recorder
         self.recorder = ManualRecorder(self.output_dir, self.frames_to_average)
@@ -448,18 +448,18 @@ class SerialNodeTDM:
                             raw_magnitudes.data = [math.sqrt(s.x**2 + s.y**2 + s.z**2) for s in msg.sensor_data]
                             self.pub_magnitude_raw.publish(raw_magnitudes)
 
-                            # Apply correction: R_CORR + normalized D_i, e_i
+                            # Apply correction: R_CORR + affine D_i, e_i
                             corrected_sensors = []
                             for s in msg.sensor_data:
-                                cx, cy, cz = s.x, s.y, s.z
+                                cx, cy, cz = float(s.x), float(s.y), float(s.z)
                                 # Apply R_CORR rotation (transform from sensor-local to reference frame)
                                 if s.id in self.R_CORR:
                                     b_rot = self.R_CORR[s.id] @ np.array([cx, cy, cz])
-                                    cx, cy, cz = b_rot[0], b_rot[1], b_rot[2]
-                                # Apply normalized calibration: D_i * b + e_i
+                                    cx, cy, cz = float(b_rot[0]), float(b_rot[1]), float(b_rot[2])
+                                # Apply affine model: D_i @ b + e_i
                                 if s.id in self.D_matrix and s.id in self.e_bias:
                                     b_cons = self.D_matrix[s.id] @ np.array([cx, cy, cz]) + self.e_bias[s.id]
-                                    cx, cy, cz = b_cons[0], b_cons[1], b_cons[2]
+                                    cx, cy, cz = float(b_cons[0]), float(b_cons[1]), float(b_cons[2])
                                 corrected_sensors.append(SensorData(id=s.id, x=cx, y=cy, z=cz))
 
                             # Create corrected message
