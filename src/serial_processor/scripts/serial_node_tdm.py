@@ -78,7 +78,7 @@ class ManualRecorder:
         if enable:
             self._start_recording()
         else:
-            self._pause_recording()
+            self._stop_recording()
 
     def _start_recording(self):
         if self._state == self.STATE_IDLE:
@@ -94,11 +94,12 @@ class ManualRecorder:
                 return
         self._state = self.STATE_RECORDING
 
-    def _pause_recording(self):
-        if self._state == self.STATE_RECORDING:
-            self._buffer.clear()
-            self._state = self.STATE_PAUSED
-            rospy.loginfo("[ManualRecorder] Recording paused")
+    def _stop_recording(self):
+        """Stop recording and close file, returning to IDLE state."""
+        if self._state in (self.STATE_RECORDING, self.STATE_PAUSED):
+            self.flush_and_close()
+            self._state = self.STATE_IDLE
+            rospy.loginfo("[ManualRecorder] Recording stopped")
 
     def on_uplink_raw(self, msg):
         """Process incoming stm_uplink_raw message. Returns True if row was written."""

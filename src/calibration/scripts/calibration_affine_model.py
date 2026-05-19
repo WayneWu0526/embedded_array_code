@@ -4,8 +4,9 @@ Affine model calibration for sensor array.
 
 Per-sensor model:  b_corrected = D_i @ b_corr + e_i
 
-For each (channel, voltage) config:
-  - b_ref_norm[n] = b_ref[n] * (mean |b_ref| / |b_ref[n]|)
+For each CSV file:
+  - Compute b_ref via CenterFieldEstimator (all 12 sensors contribute)
+  - b_ref_norm[n] = b_ref[n] * (mean |b_ref| / |b_ref[n]|)  [per-CSV normalization]
   - Fit D_i @ b_corr + e_i = b_ref_norm  per sensor
   - Output: affine_model_params.json with D_i, e_i per sensor
 
@@ -80,31 +81,26 @@ def delta_o_pre(b_raw_rs, est):
 
 def main():
     base_dir = '/home/zhang/embedded_array_ws/src/sensor_data_collection/data'
-    channels = ['manual_x', 'manual_y', 'manual_z']
-    voltages = ['1', '2', '3', '4', '5']
     est = CenterFieldEstimator()
 
-    # ── Collect data per config ───────────────────────────────────────────────
+    # ── Collect data per CSV (each CSV normalized independently) ───────────────
+    csv_files = sorted(Path(base_dir).glob('manual_record_*.csv'))
     configs = {}
-    for ch in channels:
-        for v in voltages:
-            csv_path = Path(base_dir) / ch / f'manual_record_{v}V.csv'
-            if not csv_path.exists():
-                continue
-            df = pd.read_csv(csv_path)
-            b_raw = df.values.astype(np.float64)
-            N = b_raw.shape[0]
-            b_raw_rs = b_raw.reshape(-1, 12, 3)
-            b_ref, b_corr = est.estimate_batch(b_raw)
-            mag = np.linalg.norm(b_ref, axis=1)
-            mean_mag = mag.mean()
-            b_ref_norm = b_ref * (mean_mag / mag[:, None])
-            configs[(ch, v)] = {
-                'b_raw_rs': b_raw_rs, 'b_ref': b_ref,
-                'b_ref_norm': b_ref_norm, 'b_corr': b_corr,
-                'mean_mag': mean_mag, 'N': N,
-            }
-            print(f"  {ch}/{v}V: N={N}, mean_mag={mean_mag:.4f}")
+    for csv_path in csv_files:
+        df = pd.read_csv(csv_path)
+        b_raw = df.values.astype(np.float64)
+        N = b_raw.shape[0]
+        b_raw_rs = b_raw.reshape(-1, 12, 3)
+        b_ref, b_corr = est.estimate_batch(b_raw)
+        mag = np.linalg.norm(b_ref, axis=1)
+        mean_mag = mag.mean()
+        b_ref_norm = b_ref * (mean_mag / mag[:, None])
+        configs[csv_path.name] = {
+            'b_raw_rs': b_raw_rs, 'b_ref': b_ref,
+            'b_ref_norm': b_ref_norm, 'b_corr': b_corr,
+            'mean_mag': mean_mag, 'N': N,
+        }
+        print(f"  {csv_path.name}: N={N}, mean_mag={mean_mag:.4f}")
 
     # ── Concatenate ───────────────────────────────────────────────────────────
     all_b_raw_rs   = np.concatenate([v['b_raw_rs']    for v in configs.values()], axis=0)
@@ -127,50 +123,45 @@ def main():
     D_arr_orig = np.array([results_orig[s]['D'] for s in range(1, 13)])
     e_arr_orig = np.array([results_orig[s]['e'] for s in range(1, 13)]).squeeze()
 
-    # ── Per-config evaluation ──────────────────────────────────────────────────
-    print("\n=== Per-config results ===")
+    # ── Per-CSV evaluation ────────────────────────────────────────────────────
+    print("\n=== Per-CSV results ===")
     rows = []
-    for ch in channels:
-        for v in voltages:
-            if (ch, v) not in configs:
-                continue
-            cfg = configs[(ch, v)]
-            b_raw_rs = cfg['b_raw_rs']
-            b_ref_cfg = cfg['b_ref']
-            b_ref_norm_cfg = cfg['b_ref_norm']
-            N = cfg['N']
+    for csv_name, cfg in configs.items():
+        b_raw_rs = cfg['b_raw_rs']
+        b_ref_cfg = cfg['b_ref']
+        b_ref_norm_cfg = cfg['b_ref_norm']
+        N = cfg['N']
 
-            # Pre (no calibration)
-            d_pre = delta_o_pre(b_raw_rs, est)
+        # Pre (no calibration)
+        d_pre = delta_o_pre(b_raw_rs, est)
 
-            # Post with original calibration (trained on original b_ref)
-            d_post_orig = delta_o_per_row(b_raw_rs, est, D_arr_orig, e_arr_orig, b_ref_cfg)
+        # Post with original calibration (trained on original b_ref)
+        d_post_orig = delta_o_per_row(b_raw_rs, est, D_arr_orig, e_arr_orig, b_ref_cfg)
 
-            # Post with affine calibration evaluated against ORIGINAL b_ref (fair comparison)
-            d_post_norm_fair = delta_o_per_row(b_raw_rs, est, D_arr_norm, e_arr_norm, b_ref_cfg)
+        # Post with affine calibration evaluated against ORIGINAL b_ref (fair comparison)
+        d_post_norm_fair = delta_o_per_row(b_raw_rs, est, D_arr_norm, e_arr_norm, b_ref_cfg)
 
-            # Post with affine calibration evaluated against NORMALIZED b_ref (training metric)
-            d_post_norm_train = delta_o_per_row(b_raw_rs, est, D_arr_norm, e_arr_norm, b_ref_norm_cfg)
+        # Post with affine calibration evaluated against NORMALIZED b_ref (training metric)
+        d_post_norm_train = delta_o_per_row(b_raw_rs, est, D_arr_norm, e_arr_norm, b_ref_norm_cfg)
 
-            rows.append({
-                'channel': ch,
-                'voltage': int(v),
-                'n_rows': N,
-                'mean_mag': cfg['mean_mag'],
-                'pre_mean': np.mean(d_pre),
-                'post_orig_mean': np.mean(d_post_orig),
-                'post_norm_fair': np.mean(d_post_norm_fair),
-                'post_norm_train': np.mean(d_post_norm_train),
-                'pre_std': np.std(d_pre),
-                'post_orig_std': np.std(d_post_orig),
-                'post_norm_fair_std': np.std(d_post_norm_fair),
-                'post_norm_train_std': np.std(d_post_norm_train),
-            })
+        rows.append({
+            'csv': csv_name,
+            'n_rows': N,
+            'mean_mag': cfg['mean_mag'],
+            'pre_mean': np.mean(d_pre),
+            'post_orig_mean': np.mean(d_post_orig),
+            'post_norm_fair': np.mean(d_post_norm_fair),
+            'post_norm_train': np.mean(d_post_norm_train),
+            'pre_std': np.std(d_pre),
+            'post_orig_std': np.std(d_post_orig),
+            'post_norm_fair_std': np.std(d_post_norm_fair),
+            'post_norm_train_std': np.std(d_post_norm_train),
+        })
 
-            print(f"{ch}/{v}V  pre={np.mean(d_pre):.4f}  "
-                  f"orig={np.mean(d_post_orig):.4f}  "
-                  f"norm_fair={np.mean(d_post_norm_fair):.4f}  "
-                  f"norm_train={np.mean(d_post_norm_train):.4f}")
+        print(f"{csv_name}  pre={np.mean(d_pre):.4f}  "
+              f"orig={np.mean(d_post_orig):.4f}  "
+              f"norm_fair={np.mean(d_post_norm_fair):.4f}  "
+              f"norm_train={np.mean(d_post_norm_train):.4f}")
 
     df = pd.DataFrame(rows)
 

@@ -3,14 +3,27 @@
   <!-- 仅启动STM32下位机，手动操作模式 -->
   <!--
     手动采集功能：
-    - 触发: rostopic pub /manual_capture/trigger std_msgs/Empty "{}"
-    - 采集: 接收10条 stm_uplink 消息，取 x/y/z 平均
-    - 输出: ~/embedded_array_ws/src/serial_processor/data/<capture_output_filename>
-    - 格式: CSV (timestamp,sensor_1_x,sensor_1_y,sensor_1_z,...,sensor_12_z)
-    - 数据源: stm_uplink (已校正数据: 椭球+R_CORR+一致性校正)
+    - 触发话题: /serial_node_tdm/record_trigger (std_msgs/Bool)
+    - True  = 开始录制（创建新 CSV 文件 manual_record_{timestamp}.csv）
+    - False = 暂停录制（文件保持打开）
+    - 再次 True = 创建新的 CSV 文件（自动切换）
+    - 数据源: stm_uplink_raw (原始数据)
+    - 输出: ~/embedded_array_ws/src/sensor_data_collection/data/manual_record_*.csv
+    - 格式: CSV (sensor_1_x,sensor_1_y,sensor_1_z,...,sensor_12_z)
+    - 平均: 每 frames_to_average 条消息平均后写入一行
 
     参数:
-    - capture_output_filename: CSV输出文件名，默认 manual_capture.csv
+    - output_dir: CSV 输出目录
+    - frames_to_average: 每行平均的帧数（默认 10）
+    - capture_output_filename: (已废弃，保留兼容)
+
+    使用示例:
+      # 开始录制
+      rostopic pub /serial_node_tdm/record_trigger std_msgs/Bool "data: true"
+      # 停止录制（文件保持打开）
+      rostopic pub /serial_node_tdm/record_trigger std_msgs/Bool "data: false"
+      # 再次开始（创建新文件）
+      rostopic pub /serial_node_tdm/record_trigger std_msgs/Bool "data: true"
   -->
 
   <!-- Arguments -->
@@ -18,6 +31,8 @@
   <arg name="baudrate" default="921600"/>
   <arg name="sensor_type" default="QMC6309"/>
   <arg name="sensor_float_endian" default="little"/>
+  <arg name="output_dir" default="~/embedded_array_ws/src/sensor_data_collection/data"/>
+  <arg name="frames_to_average" default="10"/>
   <arg name="capture_output_filename" default="manual_capture.csv"/>
 
   <!-- Hall Sensor Serial Node (TDM Binary Protocol) - Manual Mode -->
@@ -26,6 +41,8 @@
     <param name="baudrate" value="$(arg baudrate)"/>
     <param name="sensor_float_endian" value="$(arg sensor_float_endian)"/>
     <param name="sensor_type" value="$(arg sensor_type)"/>
+    <param name="output_dir" value="$(arg output_dir)"/>
+    <param name="frames_to_average" value="$(arg frames_to_average)"/>
     <param name="capture_output_filename" value="$(arg capture_output_filename)"/>
   </node>
 
