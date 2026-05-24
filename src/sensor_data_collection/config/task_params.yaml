@@ -1,6 +1,6 @@
 # 通用任务参数
 mode: "CVT"              # CVT 或 CCI
-num_cycles: 10     # 采集的循环次数（自动模式使用） 
+num_cycles: 20     # 采集的循环次数（自动模式使用） 
 # 手动模式专用参数（manual_trigger=true 时使用）
 num_frames_to_average: 5    # 每个位置采集的帧数做平均
 
