@@ -26,7 +26,7 @@ from sensor_array_config import get_config, SensorArrayConfig
 
 
 class ManualRecorder:
-    """Records raw stm_uplink data to CSV on trigger."""
+    """Records stm_uplink_raw data to CSV on trigger."""
 
     STATE_IDLE = 'idle'
     STATE_RECORDING = 'recording'
@@ -163,16 +163,16 @@ class SerialNodeTDM:
         self.ser = None
         self.connect()
 
-        # Publisher for uplink data (fully corrected: R_CORR + affine D_i, e_i)
+        # Publisher for calibrated uplink data (orientation-aligned raw + affine D_i, e_i)
         self.pub = rospy.Publisher('stm_uplink', StmUplink, queue_size=100)
-        # Publisher for raw uplink data (uncorrected, for archive/Phase 2 calibration)
+        # Publisher for raw uplink data: ADU->Gs plus R_CORR orientation alignment, no affine calibration
         self.pub_raw = rospy.Publisher('stm_uplink_raw', StmUplink, queue_size=100)
-        # Publisher for magnetic field magnitude of corrected data
+        # Publisher for magnetic field magnitude of calibrated data
         self.pub_magnitude = rospy.Publisher('stm_magnitude', Float32MultiArray, queue_size=100)
-        # Publisher for raw magnetic field magnitude (uncorrected)
+        # Publisher for raw magnetic field magnitude (orientation-aligned raw)
         self.pub_magnitude_raw = rospy.Publisher('stm_magnitude_raw', Float32MultiArray, queue_size=100)
 
-        # Load R_CORR rotation correction matrices
+        # Load R_CORR orientation alignment matrices
         self._load_sensor_array_params()
         # Load affine model calibration D_i, e_i from sensor config
         affine = self._sensor_config.affine_model
@@ -228,7 +228,7 @@ class SerialNodeTDM:
         return port
 
     def _load_sensor_array_params(self):
-        """Load d_list and R_CORR from SensorArrayConfig."""
+        """Load d_list and R_CORR orientation alignment from SensorArrayConfig."""
         try:
             hw = self._sensor_config.hardware
             self._d_list = np.array(hw.d_list)
@@ -236,13 +236,18 @@ class SerialNodeTDM:
             self._n_sensors = manifest.n_sensors
             self._n_groups = manifest.n_groups
             self._sensors_per_group = manifest.sensors_per_group
+            r_corr_entries = hw.R_CORR
             # Build R_CORR dict: sensor_id -> np.array(3x3)
             # Each R_CORR entry has sensor_ids and a 9-element matrix
             self.R_CORR = {}
-            for entry in hw.R_CORR:
+            for entry in r_corr_entries:
                 mat = np.array(entry.matrix).reshape(3, 3, order='F')
                 for sid in entry.sensor_ids:
                     self.R_CORR[sid] = mat
+            self._sensor_to_group = {}
+            for idx, entry in enumerate(r_corr_entries):
+                for sid in entry.sensor_ids:
+                    self._sensor_to_group[sid] = idx + 1
             rospy.loginfo(f"Loaded sensor array params: {self._n_sensors} sensors, {self._n_groups} groups")
         except Exception as e:
             rospy.logwarn(f"Failed to load sensor array params: {e}")
@@ -252,12 +257,7 @@ class SerialNodeTDM:
             self._n_groups = 0
             self._sensors_per_group = 0
             self.R_CORR = {}
-
-        # Build sensor -> group lookup (group index is position in R_CORR list)
-        self._sensor_to_group = {}
-        for idx, entry in enumerate(hw.R_CORR):
-            for sid in entry.sensor_ids:
-                self._sensor_to_group[sid] = idx + 1
+            self._sensor_to_group = {}
 
     def _on_record_trigger(self, msg):
         """Handle record trigger (Bool)."""
@@ -271,6 +271,14 @@ class SerialNodeTDM:
 
     def _on_shutdown_record(self):
         self.recorder.flush_and_close()
+
+    def _align_raw_axes(self, sensor_id, x, y, z):
+        """Apply R_CORR orientation alignment to raw Gs readings."""
+        R = self.R_CORR.get(sensor_id)
+        if R is None:
+            return x, y, z
+        b_aligned = R @ np.array([x, y, z])
+        return float(b_aligned[0]), float(b_aligned[1]), float(b_aligned[2])
 
     def connect(self):
         try:
@@ -377,6 +385,7 @@ class SerialNodeTDM:
                 x = raw_x * self._adu_to_gs
                 y = raw_y * self._adu_to_gs
                 z = raw_z * self._adu_to_gs
+                x, y, z = self._align_raw_axes(sid, x, y, z)
                 if not all(math.isfinite(value) for value in (x, y, z)):
                     rospy.logwarn(
                         f"Non-finite sensor payload detected: cycle_id={cycle_id}, slot={slot}, "
@@ -441,7 +450,8 @@ class SerialNodeTDM:
                         frame = buffer[:end_idx]
                         msg = self._parse_uplink(frame)
                         if msg is not None:
-                            # Publish raw data first (for archive/Phase 2-5)
+                            # Publish raw data first. Raw means ADU->Gs and R_CORR orientation-aligned,
+                            # but not affine-calibrated.
                             self.pub_raw.publish(msg)
 
                             # Publish raw magnetic field magnitude
@@ -449,21 +459,16 @@ class SerialNodeTDM:
                             raw_magnitudes.data = [math.sqrt(s.x**2 + s.y**2 + s.z**2) for s in msg.sensor_data]
                             self.pub_magnitude_raw.publish(raw_magnitudes)
 
-                            # Apply correction: R_CORR + affine D_i, e_i
+                            # Apply affine calibration: D_i @ b + e_i
                             corrected_sensors = []
                             for s in msg.sensor_data:
                                 cx, cy, cz = float(s.x), float(s.y), float(s.z)
-                                # Apply R_CORR rotation (transform from sensor-local to reference frame)
-                                if s.id in self.R_CORR:
-                                    b_rot = self.R_CORR[s.id] @ np.array([cx, cy, cz])
-                                    cx, cy, cz = float(b_rot[0]), float(b_rot[1]), float(b_rot[2])
-                                # Apply affine model: D_i @ b + e_i
                                 if s.id in self.D_matrix and s.id in self.e_bias:
                                     b_cons = self.D_matrix[s.id] @ np.array([cx, cy, cz]) + self.e_bias[s.id]
                                     cx, cy, cz = float(b_cons[0]), float(b_cons[1]), float(b_cons[2])
                                 corrected_sensors.append(SensorData(id=s.id, x=cx, y=cy, z=cz))
 
-                            # Create corrected message
+                            # Create calibrated message
                             corrected_msg = StmUplink()
                             corrected_msg.header = msg.header
                             corrected_msg.cycle_id = msg.cycle_id
@@ -473,10 +478,10 @@ class SerialNodeTDM:
                             corrected_msg.sensor_data = corrected_sensors
                             corrected_msg.cycle_end = msg.cycle_end
 
-                            # Publish corrected data
+                            # Publish calibrated data
                             self.pub.publish(corrected_msg)
 
-                            # Publish magnetic field magnitude (based on corrected data)
+                            # Publish magnetic field magnitude (based on calibrated data)
                             magnitudes = Float32MultiArray()
                             magnitudes.data = [math.sqrt(s.x**2 + s.y**2 + s.z**2) for s in corrected_msg.sensor_data]
                             self.pub_magnitude.publish(magnitudes)

@@ -69,7 +69,7 @@ def generate_hall_data_from_dipole(sensor_ids, p_sensor_array, R_sensor_array, d
         b_global, _ = mag_dipole_model(p_sensor_global, m_Ci, source_p_Ci, order=1)
 
         # Transform from global to sensor array frame: b_array = R.T @ b_global
-        # This is the corrected sensor frame output (R_CORR is applied in serial_processor)
+        # This matches serial_processor raw semantics: Gs data after R_CORR orientation alignment.
         b_sensor = R_sensor_array.T @ b_global
 
         # Convert from Tesla to Gs (Hall sensor output is in Gs)
@@ -839,7 +839,7 @@ def sensitivity_analysis_x_hat_noise(D_cal, sources, B_meas_cell,
 def print_magnetic_field_table(req, model_req=None, output_csv=None):
     """
     Print a comparison table of processed magnetic field values (Bx, By, Bz, |B|) in Gs
-    for each sensor in each slot (data is already R_CORR-corrected by serial_processor).
+    for each sensor in each slot (data is already orientation-aligned by serial_processor).
 
     For CVT mode (which has B0 slot 3), shows B_meas - B0 (background subtraction).
     For non-CVT mode, shows raw B_meas.

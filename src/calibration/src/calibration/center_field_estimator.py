@@ -41,7 +41,6 @@ class CenterFieldEstimator:
         indices = [sid - 1 for sid in sensor_ids]
         self.d_list = self.full_d_list[indices, :]  # (N_selected, 3)
 
-        self._load_r_corr()
         self._precompute_weight_vector()
 
     def _validate_sensor_ids(self, sensor_ids):
@@ -65,15 +64,6 @@ class CenterFieldEstimator:
                 raise ValueError(f"Duplicate sensor IDs: {sensor_ids}")
             seen.add(sid)
 
-    def _load_r_corr(self):
-        """Load R_CORR matrices from sensor config into dict sensor_id -> np.array(3,3)."""
-        self.R_CORR = {}
-        for entry in self.sensor_config.hardware.R_CORR:
-            mat = np.array(entry.matrix).reshape(3, 3, order='F')
-            for sid in entry.sensor_ids:
-                if sid in self.sensor_ids:
-                    self.R_CORR[sid] = mat
-
     def _precompute_weight_vector(self):
         """Precompute w from d_list null space. Called once on init."""
         N = len(self.sensor_ids)
@@ -95,24 +85,23 @@ class CenterFieldEstimator:
             self.w = (Q @ g) / g_norm_sq  # (N, 1)
 
     def apply_r_corr(self, b_raw):
-        """Apply R_CORR to raw sensor data.
+        """Compatibility no-op.
+
+        Raw calibration data is expected to be orientation-aligned before it reaches this
+        estimator: STM payloads are converted from ADU to Gs and R_CORR is applied
+        in serial_processor. Keep this method so older scripts that call it still
+        receive the same shaped array, but do not apply R_CORR here.
 
         Args:
-            b_raw: (N, 3) or (N*3,) raw sensor readings for selected sensors
+            b_raw: (N, 3) or (N*3,) orientation-aligned raw sensor readings
 
         Returns:
-            b_rcorr: (N, 3) with R_CORR applied per sensor
+            (N, 3) orientation-aligned raw sensor readings
         """
         N = len(self.sensor_ids)
         if b_raw.ndim == 1:
             b_raw = b_raw.reshape(N, 3)
-        b_rcorr = np.zeros_like(b_raw)
-        for i, sid in enumerate(self.sensor_ids):
-            if sid in self.R_CORR:
-                b_rcorr[i] = self.R_CORR[sid] @ b_raw[i]
-            else:
-                b_rcorr[i] = b_raw[i]
-        return b_rcorr
+        return b_raw
 
     def estimate_from_row(self, b_raw_row):
         """Estimate center field for a single row.
@@ -127,11 +116,11 @@ class CenterFieldEstimator:
         N_selected = len(self.sensor_ids)
         # Filter to selected sensor columns from full 12-sensor data
         b_raw_filtered = self._filter_to_selected_sensors(b_raw_row)
-        b_rcorr = self.apply_r_corr(b_raw_filtered)
-        if b_rcorr.ndim == 2 and b_rcorr.shape[0] == N_selected:
-            B_meas = b_rcorr.T  # (3, N_selected)
+        b_aligned = b_raw_filtered
+        if b_aligned.ndim == 2 and b_aligned.shape[0] == N_selected:
+            B_meas = b_aligned.T  # (3, N_selected)
         else:
-            raise ValueError(f"Unexpected shape after R_CORR: {b_rcorr.shape}")
+            raise ValueError(f"Unexpected selected raw shape: {b_aligned.shape}")
         b_hat = B_meas @ self.w  # (3, 1) -> (3,)
         return b_hat.ravel()
 
@@ -158,7 +147,7 @@ class CenterFieldEstimator:
 
         Returns:
             b_hats: (N, 3) center field estimates
-            b_corr: (N, N_selected, 3) R_CORR-corrected sensor readings (intermediate)
+            b_corr: (N, N_selected, 3) orientation-aligned raw sensor readings
         """
         if b_raw.ndim == 2 and b_raw.shape[1] == 36:
             b_raw = b_raw.reshape(b_raw.shape[0], 12, 3)
@@ -169,8 +158,7 @@ class CenterFieldEstimator:
         b_corr = np.zeros((N, N_sel, 3))
         for i in range(N):
             b_raw_filtered = self._filter_to_selected_sensors(b_raw[i])
-            b_rcorr = self.apply_r_corr(b_raw_filtered)
-            b_corr[i] = b_rcorr
-            B_meas = b_rcorr.T  # (3, N_selected)
+            b_corr[i] = b_raw_filtered
+            B_meas = b_raw_filtered.T  # (3, N_selected)
             b_hats[i] = (B_meas @ self.w).ravel()
         return b_hats, b_corr

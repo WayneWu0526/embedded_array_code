@@ -7,7 +7,7 @@
     - True  = 开始录制（创建新 CSV 文件 manual_record_{timestamp}.csv）
     - False = 暂停录制（文件保持打开）
     - 再次 True = 创建新的 CSV 文件（自动切换）
-    - 数据源: stm_uplink_raw (原始数据)
+    - 数据源: stm_uplink_raw (raw 数据：ADU/bit -> Gs + R_CORR 方位统一，未做 calibration)
     - 输出: ~/embedded_array_ws/src/sensor_data_collection/data/manual_record_*.csv
     - 格式: CSV (sensor_1_x,sensor_1_y,sensor_1_z,...,sensor_12_z)
     - 平均: 每 frames_to_average 条消息平均后写入一行

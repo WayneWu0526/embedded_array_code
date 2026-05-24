@@ -61,7 +61,8 @@ def _get_sensor_config():
 # =============================================================================
 
 # Global calibration parameters (loaded from yaml)
-# Note: R_CORR is applied in serial_processor and is not used in gels_localization.
+# Note: R_CORR is applied when serial_processor constructs raw Gs data.
+# gels_localization consumes orientation-aligned data and does not read R_CORR.
 D_LIST = None  # Sensor physical offset positions (3 x 12)
 MOMENT_LIST = None  # Magnetic moment for each source (slot)
 GS_TO_TESLA = 1.0e-4  # Unit conversion factor
@@ -159,8 +160,8 @@ def process_hall_data(sensor_readings):
     Applies:
     - Unit conversion (Gs -> Tesla)
 
-    Note: R_CORR is no longer applied here - it's now applied at the sensor level
-          in serial_processor. The data from stm_uplink is already R_CORR-corrected.
+    Note: R_CORR is no longer applied here. serial_processor applies it while
+          constructing raw Gs data, before affine calibration.
 
     Args:
         sensor_readings: list of SensorReading messages from one slot
@@ -174,7 +175,7 @@ def process_hall_data(sensor_readings):
     B_meas = np.zeros((3, N))
 
     for i, reading in enumerate(sensor_readings):
-        # Data from stm_uplink is already R_CORR-corrected (applied in serial_processor)
+        # Data from stm_uplink is already orientation-aligned by serial_processor.
         # Just do unit conversion: Gs -> Tesla
         b_corrected = np.array([reading.x, reading.y, reading.z])
         B_meas[:, i] = b_corrected * GS_TO_TESLA

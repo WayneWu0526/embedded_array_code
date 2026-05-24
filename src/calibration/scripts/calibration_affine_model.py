@@ -2,15 +2,15 @@
 """
 Affine model calibration for sensor array.
 
-Per-sensor model:  b_corrected = D_i @ b_corr + e_i
+Per-sensor model:  b_corrected = D_i @ b_raw + e_i
 
 For each CSV file:
   - Compute b_ref via CenterFieldEstimator (all 12 sensors contribute)
   - b_ref_norm[n] = b_ref[n] * (mean |b_ref| / |b_ref[n]|)  [per-CSV normalization]
-  - Fit D_i @ b_corr + e_i = b_ref_norm  per sensor
+  - Fit D_i @ b_raw + e_i = b_ref_norm  per sensor
   - Output: affine_model_params.json with D_i, e_i per sensor
 
-Pipeline: b_raw -> R_CORR -> D_i @ b_corr + e_i -> b_corrected
+Pipeline: b_raw(orientation-aligned, Gs) -> D_i @ b_raw + e_i -> b_corrected
 """
 
 import numpy as np
@@ -57,7 +57,7 @@ def delta_o_per_row(b_raw_rs, est, D_arr, e_arr, b_ref_eval):
     Delta_o = np.zeros(N)
     for n in range(N):
         filtered = est._filter_to_selected_sensors(b_raw_rs[n])
-        b_corr_n = est.apply_r_corr(filtered)
+        b_corr_n = filtered
         o_n = np.zeros((12, 3))
         for s in range(12):
             o_n[s] = D_arr[s] @ b_corr_n[s, :] + e_arr[s] - b_ref_eval[n]
@@ -72,7 +72,7 @@ def delta_o_pre(b_raw_rs, est):
     for n in range(N):
         b_ref_n = est.estimate_from_row(b_raw_rs[n])
         filtered = est._filter_to_selected_sensors(b_raw_rs[n])
-        b_corr_n = est.apply_r_corr(filtered)
+        b_corr_n = filtered
         o_n = b_corr_n - b_ref_n
         o_bar_n = np.mean(o_n, axis=0)
         Delta_o[n] = np.sqrt(np.mean(np.sum((o_n - o_bar_n) ** 2, axis=1)))
@@ -108,8 +108,8 @@ def main():
     all_b_ref_norm = np.concatenate([v['b_ref_norm']  for v in configs.values()], axis=0)
     all_b_corr     = np.concatenate([v['b_corr']      for v in configs.values()], axis=0)
 
-    # R_CORR applied exactly once inside estimate_batch() for both b_ref and b_corr.
-    # b_corr_all reuses the same intermediate R_CORR-corrected data instead of recomputing.
+    # Input CSVs are expected to contain raw Gs data after R_CORR orientation alignment.
+    # No additional R_CORR step is applied during affine calibration.
 
     # ── Fit with NORMALIZED b_ref ─────────────────────────────────────────────
     print("\n=== Fitting affine model with normalized b_ref ===")
