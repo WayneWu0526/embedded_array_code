@@ -33,6 +33,8 @@ Thumbs.db
 
 # Calibration output data (raw and processed)
 plot/
+!src/sensor_data_collection/plot/
+!src/sensor_data_collection/plot/plot_cycle_pose.py
 report/
 
 # Serial processor config - protect calibration params

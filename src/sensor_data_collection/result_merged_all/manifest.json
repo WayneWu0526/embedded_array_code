@@ -1,0 +1,373 @@
+{
+  "description": "Combined result directory for ground-truth error scatter plots.",
+  "source_result_dirs": [
+    "result_merged",
+    "result_merged_2",
+    "result_merged_3",
+    "result_8"
+  ],
+  "num_cycles": 60,
+  "cycle_id_policy": "Reindexed sequentially from 0 while preserving original source in combined_merge_source.",
+  "records": [
+    {
+      "merged_all_cycle_file": "cycle_0000.json",
+      "source_result_dir": "result_merged",
+      "source_cycle_file": "cycle_0000.json",
+      "source_cycle_id": 0
+    },
+    {
+      "merged_all_cycle_file": "cycle_0001.json",
+      "source_result_dir": "result_merged",
+      "source_cycle_file": "cycle_0001.json",
+      "source_cycle_id": 1
+    },
+    {
+      "merged_all_cycle_file": "cycle_0002.json",
+      "source_result_dir": "result_merged",
+      "source_cycle_file": "cycle_0002.json",
+      "source_cycle_id": 2
+    },
+    {
+      "merged_all_cycle_file": "cycle_0003.json",
+      "source_result_dir": "result_merged",
+      "source_cycle_file": "cycle_0003.json",
+      "source_cycle_id": 0
+    },
+    {
+      "merged_all_cycle_file": "cycle_0004.json",
+      "source_result_dir": "result_merged",
+      "source_cycle_file": "cycle_0004.json",
+      "source_cycle_id": 1
+    },
+    {
+      "merged_all_cycle_file": "cycle_0005.json",
+      "source_result_dir": "result_merged",
+      "source_cycle_file": "cycle_0005.json",
+      "source_cycle_id": 2
+    },
+    {
+      "merged_all_cycle_file": "cycle_0006.json",
+      "source_result_dir": "result_merged",
+      "source_cycle_file": "cycle_0006.json",
+      "source_cycle_id": 0
+    },
+    {
+      "merged_all_cycle_file": "cycle_0007.json",
+      "source_result_dir": "result_merged",
+      "source_cycle_file": "cycle_0007.json",
+      "source_cycle_id": 1
+    },
+    {
+      "merged_all_cycle_file": "cycle_0008.json",
+      "source_result_dir": "result_merged",
+      "source_cycle_file": "cycle_0008.json",
+      "source_cycle_id": 2
+    },
+    {
+      "merged_all_cycle_file": "cycle_0009.json",
+      "source_result_dir": "result_merged",
+      "source_cycle_file": "cycle_0009.json",
+      "source_cycle_id": 3
+    },
+    {
+      "merged_all_cycle_file": "cycle_0010.json",
+      "source_result_dir": "result_merged",
+      "source_cycle_file": "cycle_0010.json",
+      "source_cycle_id": 4
+    },
+    {
+      "merged_all_cycle_file": "cycle_0011.json",
+      "source_result_dir": "result_merged",
+      "source_cycle_file": "cycle_0011.json",
+      "source_cycle_id": 5
+    },
+    {
+      "merged_all_cycle_file": "cycle_0012.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0000.json",
+      "source_cycle_id": 0
+    },
+    {
+      "merged_all_cycle_file": "cycle_0013.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0001.json",
+      "source_cycle_id": 1
+    },
+    {
+      "merged_all_cycle_file": "cycle_0014.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0002.json",
+      "source_cycle_id": 2
+    },
+    {
+      "merged_all_cycle_file": "cycle_0015.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0003.json",
+      "source_cycle_id": 3
+    },
+    {
+      "merged_all_cycle_file": "cycle_0016.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0004.json",
+      "source_cycle_id": 4
+    },
+    {
+      "merged_all_cycle_file": "cycle_0017.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0005.json",
+      "source_cycle_id": 5
+    },
+    {
+      "merged_all_cycle_file": "cycle_0018.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0006.json",
+      "source_cycle_id": 6
+    },
+    {
+      "merged_all_cycle_file": "cycle_0019.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0007.json",
+      "source_cycle_id": 7
+    },
+    {
+      "merged_all_cycle_file": "cycle_0020.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0008.json",
+      "source_cycle_id": 8
+    },
+    {
+      "merged_all_cycle_file": "cycle_0021.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0009.json",
+      "source_cycle_id": 9
+    },
+    {
+      "merged_all_cycle_file": "cycle_0022.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0010.json",
+      "source_cycle_id": 10
+    },
+    {
+      "merged_all_cycle_file": "cycle_0023.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0011.json",
+      "source_cycle_id": 11
+    },
+    {
+      "merged_all_cycle_file": "cycle_0024.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0012.json",
+      "source_cycle_id": 12
+    },
+    {
+      "merged_all_cycle_file": "cycle_0025.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0013.json",
+      "source_cycle_id": 13
+    },
+    {
+      "merged_all_cycle_file": "cycle_0026.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0014.json",
+      "source_cycle_id": 14
+    },
+    {
+      "merged_all_cycle_file": "cycle_0027.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0015.json",
+      "source_cycle_id": 15
+    },
+    {
+      "merged_all_cycle_file": "cycle_0028.json",
+      "source_result_dir": "result_merged_2",
+      "source_cycle_file": "cycle_0016.json",
+      "source_cycle_id": 16
+    },
+    {
+      "merged_all_cycle_file": "cycle_0029.json",
+      "source_result_dir": "result_merged_3",
+      "source_cycle_file": "cycle_0000.json",
+      "source_cycle_id": 0
+    },
+    {
+      "merged_all_cycle_file": "cycle_0030.json",
+      "source_result_dir": "result_merged_3",
+      "source_cycle_file": "cycle_0001.json",
+      "source_cycle_id": 1
+    },
+    {
+      "merged_all_cycle_file": "cycle_0031.json",
+      "source_result_dir": "result_merged_3",
+      "source_cycle_file": "cycle_0002.json",
+      "source_cycle_id": 2
+    },
+    {
+      "merged_all_cycle_file": "cycle_0032.json",
+      "source_result_dir": "result_merged_3",
+      "source_cycle_file": "cycle_0003.json",
+      "source_cycle_id": 3
+    },
+    {
+      "merged_all_cycle_file": "cycle_0033.json",
+      "source_result_dir": "result_merged_3",
+      "source_cycle_file": "cycle_0004.json",
+      "source_cycle_id": 4
+    },
+    {
+      "merged_all_cycle_file": "cycle_0034.json",
+      "source_result_dir": "result_merged_3",
+      "source_cycle_file": "cycle_0005.json",
+      "source_cycle_id": 5
+    },
+    {
+      "merged_all_cycle_file": "cycle_0035.json",
+      "source_result_dir": "result_merged_3",
+      "source_cycle_file": "cycle_0006.json",
+      "source_cycle_id": 6
+    },
+    {
+      "merged_all_cycle_file": "cycle_0036.json",
+      "source_result_dir": "result_merged_3",
+      "source_cycle_file": "cycle_0007.json",
+      "source_cycle_id": 7
+    },
+    {
+      "merged_all_cycle_file": "cycle_0037.json",
+      "source_result_dir": "result_merged_3",
+      "source_cycle_file": "cycle_0008.json",
+      "source_cycle_id": 8
+    },
+    {
+      "merged_all_cycle_file": "cycle_0038.json",
+      "source_result_dir": "result_merged_3",
+      "source_cycle_file": "cycle_0009.json",
+      "source_cycle_id": 9
+    },
+    {
+      "merged_all_cycle_file": "cycle_0039.json",
+      "source_result_dir": "result_merged_3",
+      "source_cycle_file": "cycle_0010.json",
+      "source_cycle_id": 10
+    },
+    {
+      "merged_all_cycle_file": "cycle_0040.json",
+      "source_result_dir": "result_merged_3",
+      "source_cycle_file": "cycle_0011.json",
+      "source_cycle_id": 11
+    },
+    {
+      "merged_all_cycle_file": "cycle_0041.json",
+      "source_result_dir": "result_merged_3",
+      "source_cycle_file": "cycle_0012.json",
+      "source_cycle_id": 12
+    },
+    {
+      "merged_all_cycle_file": "cycle_0042.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0000.json",
+      "source_cycle_id": 0
+    },
+    {
+      "merged_all_cycle_file": "cycle_0043.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0001.json",
+      "source_cycle_id": 1
+    },
+    {
+      "merged_all_cycle_file": "cycle_0044.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0002.json",
+      "source_cycle_id": 2
+    },
+    {
+      "merged_all_cycle_file": "cycle_0045.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0003.json",
+      "source_cycle_id": 3
+    },
+    {
+      "merged_all_cycle_file": "cycle_0046.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0004.json",
+      "source_cycle_id": 4
+    },
+    {
+      "merged_all_cycle_file": "cycle_0047.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0005.json",
+      "source_cycle_id": 5
+    },
+    {
+      "merged_all_cycle_file": "cycle_0048.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0006.json",
+      "source_cycle_id": 6
+    },
+    {
+      "merged_all_cycle_file": "cycle_0049.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0007.json",
+      "source_cycle_id": 7
+    },
+    {
+      "merged_all_cycle_file": "cycle_0050.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0008.json",
+      "source_cycle_id": 8
+    },
+    {
+      "merged_all_cycle_file": "cycle_0051.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0009.json",
+      "source_cycle_id": 9
+    },
+    {
+      "merged_all_cycle_file": "cycle_0052.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0010.json",
+      "source_cycle_id": 10
+    },
+    {
+      "merged_all_cycle_file": "cycle_0053.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0011.json",
+      "source_cycle_id": 11
+    },
+    {
+      "merged_all_cycle_file": "cycle_0054.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0012.json",
+      "source_cycle_id": 12
+    },
+    {
+      "merged_all_cycle_file": "cycle_0055.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0013.json",
+      "source_cycle_id": 13
+    },
+    {
+      "merged_all_cycle_file": "cycle_0056.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0014.json",
+      "source_cycle_id": 14
+    },
+    {
+      "merged_all_cycle_file": "cycle_0057.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0015.json",
+      "source_cycle_id": 15
+    },
+    {
+      "merged_all_cycle_file": "cycle_0058.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0016.json",
+      "source_cycle_id": 16
+    },
+    {
+      "merged_all_cycle_file": "cycle_0059.json",
+      "source_result_dir": "result_8",
+      "source_cycle_file": "cycle_0017.json",
+      "source_cycle_id": 17
+    }
+  ]
+}
