@@ -1,0 +1,7 @@
+sensor_type: "AK09973D"
+bit_width: 16
+range_gs: 360.4
+n_sensors: 12
+n_groups: 4
+sensors_per_group: 3
+gs_to_tesla: 1.0e-4

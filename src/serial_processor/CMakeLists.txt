@@ -12,6 +12,7 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   std_msgs
   geometry_msgs
+  sensor_msgs
   message_generation
 )
 
@@ -54,6 +55,7 @@ add_message_files(
   SensorData.msg
   StmUplink.msg
   StmDownlink.msg
+  MagGradImuRaw.msg
 )
 
 ## Generate services in the 'srv' folder
@@ -74,6 +76,7 @@ generate_messages(
   DEPENDENCIES
   std_msgs
   geometry_msgs
+  sensor_msgs
 )
 
 ################################################
@@ -108,7 +111,7 @@ generate_messages(
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES serial_processor
-  CATKIN_DEPENDS roscpp rospy std_msgs message_runtime
+  CATKIN_DEPENDS roscpp rospy std_msgs geometry_msgs sensor_msgs message_runtime
 #  DEPENDS system_lib
 )
 
@@ -165,6 +168,7 @@ include_directories(
 catkin_install_python(PROGRAMS
   scripts/serial_node.py
   scripts/serial_node_tdm.py
+  scripts/serial_node_maggrad.py
   scripts/mock_stm_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

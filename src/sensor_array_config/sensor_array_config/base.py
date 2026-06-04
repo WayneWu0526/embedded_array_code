@@ -153,6 +153,7 @@ from enum import Enum
 
 class SensorType(Enum):
     QMC6309 = "QMC6309"
+    AK09973D = "AK09973D"
 
 # ---------- registry ----------
 _REGISTRY: Dict[str, type] = {}
@@ -167,5 +168,7 @@ def register_sensor_type(name: str, cls: type):
 
 def _lazy_register():
     from .qmc6309 import QMC6309Config
+    from .ak09973d import AK09973DConfig
     _REGISTRY["QMC6309"] = QMC6309Config
+    _REGISTRY["AK09973D"] = AK09973DConfig
 _lazy_register()
