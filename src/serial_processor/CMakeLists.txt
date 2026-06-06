@@ -13,6 +13,7 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   geometry_msgs
   sensor_msgs
+  sensor_array_config
   message_generation
 )
 
@@ -111,7 +112,7 @@ generate_messages(
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES serial_processor
-  CATKIN_DEPENDS roscpp rospy std_msgs geometry_msgs sensor_msgs message_runtime
+  CATKIN_DEPENDS roscpp rospy std_msgs geometry_msgs sensor_msgs sensor_array_config message_runtime
 #  DEPENDS system_lib
 )
 

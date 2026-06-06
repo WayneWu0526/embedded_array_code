@@ -1,0 +1,63 @@
+<launch>
+  <!--
+    MagGrad continuous collection:
+
+    Start:
+      roslaunch sensor_data_collection maggrad_continuous_collection.launch
+
+    Start with live image viewer:
+      roslaunch sensor_data_collection maggrad_continuous_collection.launch show_image:=true
+
+    Start recording:
+      rostopic pub /maggrad_continuous_collection/record_trigger std_msgs/Bool "data: true" -1
+
+    Stop recording:
+      rostopic pub /maggrad_continuous_collection/record_trigger std_msgs/Bool "data: false" -1
+
+    Output:
+      $(arg output_dir)/maggrad_continuous_*.csv
+  -->
+
+  <arg name="port" default="auto"/>
+  <arg name="baudrate" default="115200"/>
+  <arg name="sensor_type" default="QMC6309"/>
+  <arg name="sensor_float_endian" default="little"/>
+  <arg name="output_dir" default="~/embedded_array_ws_Mi-Gels/src/sensor_data_collection/data"/>
+  <arg name="startup_strategy" default="cont"/>
+  <arg name="startup_sensors" default="auto"/>
+  <arg name="trigger_rate_hz" default="100"/>
+  <arg name="imu_config" default="$(find sensor_data_collection)/config/icm42670.yaml"/>
+  <arg name="collection_config" default="$(find sensor_data_collection)/config/maggrad_continuous_collection.yaml"/>
+  <arg name="signal_config" default="$(find sensor_data_collection)/config/signal_params_maggrad_continuous.yaml"/>
+  <arg name="record_tf" default="true"/>
+  <arg name="tf_reference_frame" default="lab_table"/>
+  <arg name="show_image" default="false"/>
+
+  <include file="$(find zlab_robots_calibration)/launch/localization_tagslam.launch"/>
+
+  <node if="$(arg show_image)" name="maggrad_image_view" pkg="rqt_image_view"
+        type="rqt_image_view" output="screen"/>
+
+  <node name="fy8300" pkg="signal_generator" type="fy8300_node" output="screen">
+    <rosparam command="load" file="$(arg signal_config)"/>
+  </node>
+
+  <node name="serial_node_maggrad" pkg="serial_processor" type="serial_node_maggrad.py" output="screen">
+    <rosparam file="$(arg imu_config)" command="load"/>
+    <param name="port" value="$(arg port)"/>
+    <param name="baudrate" value="$(arg baudrate)"/>
+    <param name="sensor_type" value="$(arg sensor_type)"/>
+    <param name="output_dir" value="$(arg output_dir)"/>
+    <param name="startup_strategy" value="$(arg startup_strategy)"/>
+    <param name="startup_sensors" value="$(arg startup_sensors)"/>
+    <param name="trigger_rate_hz" value="$(arg trigger_rate_hz)"/>
+  </node>
+
+  <node name="maggrad_continuous_collection" pkg="sensor_data_collection"
+        type="maggrad_continuous_collection_node.py" output="screen">
+    <rosparam file="$(arg collection_config)" command="load"/>
+    <param name="output_dir" value="$(arg output_dir)"/>
+    <param name="record_tf" value="$(arg record_tf)"/>
+    <param name="tf_reference_frame" value="$(arg tf_reference_frame)"/>
+  </node>
+</launch>

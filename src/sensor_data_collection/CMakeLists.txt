@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(sensor_data_collection)
 
-find_package(catkin REQUIRED COMPONENTS roscpp rospy std_msgs geometry_msgs tf serial_processor message_generation)
+find_package(catkin REQUIRED COMPONENTS roscpp rospy std_msgs geometry_msgs sensor_msgs tf tf2_ros serial_processor message_generation)
 
 add_message_files(
   FILES
@@ -20,9 +20,11 @@ generate_messages(
   geometry_msgs
 )
 
-catkin_package(CATKIN_DEPENDS message_runtime std_msgs geometry_msgs)
+catkin_package(CATKIN_DEPENDS message_runtime std_msgs geometry_msgs sensor_msgs tf2_ros)
 
-catkin_install_python(PROGRAMS scripts/data_collection_node.py
+catkin_install_python(PROGRAMS
+  scripts/data_collection_node.py
+  scripts/maggrad_continuous_collection_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

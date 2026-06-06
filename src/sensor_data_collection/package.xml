@@ -12,7 +12,9 @@
   <depend>rospy</depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
   <depend>tf</depend>
+  <depend>tf2_ros</depend>
   <depend>serial_processor</depend>
   <depend>signal_generator</depend>
   <depend>message_generation</depend>

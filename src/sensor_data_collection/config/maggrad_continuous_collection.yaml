@@ -1,0 +1,30 @@
+n_sensors: 12
+record_format: "csv"
+use_calibrated: false
+record_tf: true
+tf_reference_frame: "lab_table"
+tf_frames:
+  - "sensor_array_filt"
+  - "diana7_em_tcp_filt"
+  - "arm1_em_tcp_filt"
+  - "arm2_em_tcp_filt"
+
+coil_frequency_hz: 1.0
+default_amplitude_v: 5.0
+default_offset_v: 2.5
+
+# Host-side electromagnet labels. FY8300 generates the three phase-shifted
+# waveforms continuously; this node only tags each AK snapshot by time.
+coil_timing:
+  - name: "coil_1_on"
+    channel: 1
+    phase_deg: 0.0
+    duty_cycle: 25.0
+  - name: "coil_2_on"
+    channel: 2
+    phase_deg: 90.0
+    duty_cycle: 25.0
+  - name: "coil_3_on"
+    channel: 3
+    phase_deg: 180.0
+    duty_cycle: 25.0
