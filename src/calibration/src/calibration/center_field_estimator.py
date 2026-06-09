@@ -22,10 +22,10 @@ class CenterFieldEstimator:
         if sensor_config is None:
             sensor_config = get_array_config("qmc6309_12ch_v1")
         self.sensor_config = sensor_config
-        self.full_d_list = np.array(sensor_config.hardware.d_list)  # (12, 3)
+        self.full_d_list = np.array(sensor_config.hardware.d_list)
         self.n_sensors = int(sensor_config.manifest.n_sensors)
 
-        # Default: all 12 sensors
+        # Default: all sensors in the selected array.
         if sensor_ids is None:
             sensor_ids = list(range(1, self.n_sensors + 1))
 
@@ -93,7 +93,7 @@ class CenterFieldEstimator:
             b_hat: (3,) center field estimate
         """
         N_selected = len(self.sensor_ids)
-        # Filter to selected sensor columns from full 12-sensor data
+        # Filter to selected sensor columns from the full array data.
         b_raw_filtered = self._filter_to_selected_sensors(b_raw_row)
         b_aligned = b_raw_filtered
         if b_aligned.ndim == 2 and b_aligned.shape[0] == N_selected:
@@ -122,7 +122,7 @@ class CenterFieldEstimator:
         """Estimate center field for multiple rows.
 
         Args:
-            b_raw: (N, 36) or (N, 12, 3) raw sensor data
+            b_raw: (N, n_sensors*3) or (N, n_sensors, 3) raw sensor data
 
         Returns:
             b_hats: (N, 3) center field estimates
