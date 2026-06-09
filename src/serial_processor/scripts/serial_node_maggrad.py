@@ -24,7 +24,7 @@ from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Float32MultiArray, Header, String
 
 from serial_processor.msg import MagGradImuRaw, SensorData, StmUplink
-from sensor_array_config import SensorArrayConfig, get_config
+from sensor_array_config import ArrayConfig, get_array_config, get_imu_config, get_profile
 
 
 class MagGradProtocol:
@@ -124,22 +124,40 @@ class SerialNodeMagGrad:
         self.port = self._resolve_serial_port(rospy.get_param("~port", "auto"))
         self.baudrate = int(rospy.get_param("~baudrate", 115200))
         self.post_open_delay = float(rospy.get_param("~post_open_delay", 2.2))
-        self.sensor_type = rospy.get_param("~sensor_type", "AK09973D")
-        self.sensor_config: SensorArrayConfig = get_config(self.sensor_type)
-        self.adu_to_gs = float(self.sensor_config.manifest.adu_to_gs)
-        self.n_sensors = int(self.sensor_config.manifest.n_sensors)
+        self.profile_name = rospy.get_param("~profile", "maggrad_dual_v1")
+        self.profile = get_profile(self.profile_name)
+        self.array_config_name = rospy.get_param("~array_config", self.profile.default_array_config)
+        self.imu_config_name = rospy.get_param("~imu_config", self.profile.default_imu_config)
+        self.array_config: ArrayConfig = get_array_config(self.array_config_name)
+        self.imu_config = get_imu_config(self.imu_config_name)
+        self.adu_to_gs = float(self.array_config.adu_to_gs)
+        self.n_sensors = int(self.array_config.manifest.n_sensors)
+        default_output_dir = os.path.abspath(os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..",
+            "..",
+            "data",
+            "serial_processor",
+            "maggrad",
+        ))
         self.output_dir = os.path.expanduser(
-            rospy.get_param("~output_dir", "~/embedded_array_ws/src/sensor_data_collection/data")
+            rospy.get_param(
+                "~output_dir",
+                default_output_dir,
+            )
         )
         self.startup_strategy = str(rospy.get_param("~startup_strategy", "cont")).strip().lower()
         self.startup_sensors = str(rospy.get_param("~startup_sensors", "auto")).strip().upper()
         self.trigger_rate_hz = int(rospy.get_param("~trigger_rate_hz", 100))
 
-        self.publish_scaled_imu = self._param_bool(rospy.get_param("~publish_scaled_imu", True))
-        self.accel_lsb_per_g = float(rospy.get_param("~accel_lsb_per_g", 8192.0))
-        self.gyro_lsb_per_dps = float(rospy.get_param("~gyro_lsb_per_dps", 32.8))
-        self.imu_frame_id = rospy.get_param("~imu_frame_id", "maggrad_imu")
-        self.imu_axis_transform = self._load_matrix_param("~axis_transform_matrix", np.eye(3))
+        self.publish_scaled_imu = self._param_bool(
+            rospy.get_param("~publish_scaled_imu", self.imu_config.publish_scaled_imu)
+        )
+        self.accel_lsb_per_g = float(self.imu_config.accel_lsb_per_g)
+        self.gyro_lsb_per_dps = float(self.imu_config.gyro_lsb_per_dps)
+        self.imu_frame_id = self.imu_config.imu_frame_id
+        self.imu_axis_transform = self.imu_config.axis_transform_numpy()
 
         self.R_CORR = self._load_r_corr()
         self.D_matrix, self.e_bias = self._load_affine()
@@ -162,7 +180,8 @@ class SerialNodeMagGrad:
         self._configure_firmware_stream()
         rospy.loginfo(
             f"SerialNodeMagGrad initialized: port={self.port}, baudrate={self.baudrate}, "
-            f"sensor_type={self.sensor_type}, adu_to_gs={self.adu_to_gs:.8f}"
+            f"profile={self.profile_name}, array_config={self.array_config_name}, "
+            f"imu_config={self.imu_config_name}, adu_to_gs={self.adu_to_gs:.8f}"
         )
 
     def _resolve_serial_port(self, configured_port):
@@ -195,7 +214,7 @@ class SerialNodeMagGrad:
 
     def _load_r_corr(self):
         r_corr = {}
-        for entry in self.sensor_config.hardware.R_CORR:
+        for entry in self.array_config.hardware.R_CORR:
             mat = np.array(entry.matrix).reshape(3, 3, order="F")
             for sid in entry.sensor_ids:
                 r_corr[int(sid)] = mat
@@ -205,21 +224,11 @@ class SerialNodeMagGrad:
     def _load_affine(self):
         d_matrix = {}
         e_bias = {}
-        for sid, params in self.sensor_config.affine_model.params.items():
+        for sid, params in self.array_config.affine_model.params.items():
             d_matrix[int(sid)] = np.array(params.D_i)
             e_bias[int(sid)] = np.array(params.e_i).squeeze()
         rospy.loginfo(f"Loaded affine calibration for {len(d_matrix)} sensors")
         return d_matrix, e_bias
-
-    def _load_matrix_param(self, name, default):
-        value = rospy.get_param(name, default.tolist())
-        mat = np.array(value, dtype=float)
-        if mat.shape == (9,):
-            mat = mat.reshape(3, 3)
-        if mat.shape != (3, 3):
-            rospy.logwarn(f"Invalid matrix parameter {name}: shape={mat.shape}; using identity")
-            mat = np.eye(3)
-        return mat
 
     def connect(self):
         try:
@@ -243,19 +252,15 @@ class SerialNodeMagGrad:
         rospy.loginfo(f"STM32 command sent: {command.strip()}")
 
     def _startup_sensor_arg(self):
-        sensor_type = str(self.sensor_type).strip().upper()
         requested = self.startup_sensors
         if requested in ("", "AUTO"):
-            return "ALL" if sensor_type == "QMC6309" else "AK_ICM"
-
-        if sensor_type == "QMC6309":
-            aliases = {
-                "AK": "QMC",
-                "AK_ICM": "ALL",
-                "MAG": "QMC",
-                "IMU": "ICM",
-            }
-            return aliases.get(requested, requested)
+            try:
+                return self.profile.startup_sensors[self.array_config_name]
+            except KeyError as exc:
+                raise ValueError(
+                    f"profile {self.profile_name!r} does not define startup_sensors "
+                    f"for array_config {self.array_config_name!r}"
+                ) from exc
         return requested
 
     def _configure_firmware_stream(self):
@@ -436,7 +441,9 @@ class SerialNodeMagGrad:
                 z=float(hz) * self.adu_to_gs,
             ))
 
-        self._publish_magnetometer_array(seq, tick_ms, bitmap, chip_sensors, "maggrad_ak_array")
+        self._publish_magnetometer_array(
+            seq, tick_ms, bitmap, chip_sensors, self.array_config.manifest.frame_id
+        )
 
     def _publish_qmc_array(self, seq, tick_ms, payload):
         if len(payload) < 3:
@@ -465,7 +472,43 @@ class SerialNodeMagGrad:
                 z=float(z) * self.adu_to_gs,
             ))
 
-        self._publish_magnetometer_array(seq, tick_ms, bitmap, chip_sensors, "stm32h7_qmc_array")
+        self._publish_magnetometer_array(
+            seq, tick_ms, bitmap, chip_sensors, self.array_config.manifest.frame_id
+        )
+
+    def _publish_tmag_array(self, seq, tick_ms, payload):
+        if len(payload) < 3:
+            rospy.logwarn("TMAG_ARRAY payload too short")
+            return
+        count = payload[0]
+        bitmap = struct.unpack_from("<H", payload, 1)[0]
+        expected_len = 3 + count * 12
+        if len(payload) != expected_len:
+            rospy.logwarn(f"Invalid TMAG_ARRAY length: got={len(payload)}, expected={expected_len}")
+            return
+
+        chip_sensors = []
+        offset = 3
+        for _ in range(count):
+            sid, ch_mask, addr, x, y, z, status, err, flags = struct.unpack_from(
+                "<BBBhhhBBB", payload, offset
+            )
+            offset += 12
+            if err or flags:
+                rospy.logdebug(
+                    f"TMAG sensor status: sid={sid}, ch_mask=0x{ch_mask:02X}, addr=0x{addr:02X}, "
+                    f"status={status}, err={err}, flags=0x{flags:02X}"
+                )
+            chip_sensors.append(SensorData(
+                id=sid,
+                x=float(x) * self.adu_to_gs,
+                y=float(y) * self.adu_to_gs,
+                z=float(z) * self.adu_to_gs,
+            ))
+
+        self._publish_magnetometer_array(
+            seq, tick_ms, bitmap, chip_sensors, self.array_config.manifest.frame_id
+        )
 
     def _publish_imu(self, seq, tick_ms, payload):
         if len(payload) != 14:
@@ -506,6 +549,8 @@ class SerialNodeMagGrad:
         frame_type, seq, tick_ms, payload = frame
         if frame_type == MagGradProtocol.TYPE_AK_ARRAY:
             self._publish_ak_array(seq, tick_ms, payload)
+        elif frame_type == MagGradProtocol.TYPE_TMAG_ARRAY:
+            self._publish_tmag_array(seq, tick_ms, payload)
         elif frame_type == MagGradProtocol.TYPE_QMC_ARRAY:
             self._publish_qmc_array(seq, tick_ms, payload)
         elif frame_type == MagGradProtocol.TYPE_ICM:

@@ -1,3 +1,47 @@
+# sensor_data_collection
+
+ROS package for Mi-Gels magnetic sensor data collection.
+
+## Current Mi-Gels Entrypoints
+
+| File | Purpose |
+| --- | --- |
+| `launch/maggrad_continuous_collection.launch` | Main continuous MagGrad collection flow |
+| `launch/maggrad_stream.launch` | STM32 MagGrad stream only, without collection node |
+| `launch/stm32_manual.launch` | Manual MagGrad calibration CSV recording |
+| `scripts/maggrad_continuous_collection_node.py` | Writes continuous MagGrad CSV/JSONL records |
+| `scripts/maggrad_manual_record_node.py` | Topic-triggered manual averaged CSV recorder |
+| `config/maggrad_continuous_collection.yaml` | Continuous collection node parameters |
+| `config/signal_params_maggrad_continuous.yaml` | FY8300 timing for continuous collection |
+| `config/signal_params_manual.yaml` | FY8300/manual calibration timing |
+| `plot/*.py` | Plot utilities; generated figures are archived outside this package |
+
+New experiment output should not be written under this package. Prefer the
+workspace-level `data/` directory, NAS, or another external archive.
+
+Array, IMU, and board-profile configuration lives in
+`src/sensor_array_config/config/`.
+
+## Legacy GELS/TDM Reference
+
+The older cycle-based GELS/TDM flow is retained for reproducibility and
+algorithm reference:
+
+| File | Legacy role |
+| --- | --- |
+| `launch/legacy/data_collection.launch` | Old online TDM/CVT/CCI collection flow |
+| `launch/legacy/test_stm32.launch` | Minimal old TDM STM32 communication test |
+| `scripts/data_collection_node.py` | Old cycle JSON collection node |
+| `config/legacy/params_cvt.yaml` | CVT cycle parameters |
+| `config/legacy/params_cci.yaml` | CCI cycle parameters |
+| `config/legacy/signal_params_cvt.yaml` | CVT FY8300 parameters |
+| `config/legacy/signal_params_cci.yaml` | CCI FY8300 parameters |
+| `config/legacy/task_params.yaml` | Old cycle collection task parameters |
+| `srv/LocalizeCycle.srv` | Old cycle-localization service request |
+| `firmware_legacy/stm32h7_main.c` | Historical STM32H7 firmware reference, not catkin source |
+
+The detailed protocol notes below describe this legacy cycle-based system.
+
 # 传感器数据采集系统说明文档
 
 ## 硬件：
@@ -230,5 +274,3 @@ AA55 01 0000 00 0FFF 00000000000000FA [01 x y z] ... [12 x y z] 00
 ### 存储方式
 
 每完成一个 cycle，将上述 JSON 写入 `output_dir/cycle_{cycle_id:04d}.json`。EKF 算法服务可按需读取这些文件进行位姿估计。
-
-

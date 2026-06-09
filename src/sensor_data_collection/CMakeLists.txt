@@ -25,6 +25,7 @@ catkin_package(CATKIN_DEPENDS message_runtime std_msgs geometry_msgs sensor_msgs
 catkin_install_python(PROGRAMS
   scripts/data_collection_node.py
   scripts/maggrad_continuous_collection_node.py
+  scripts/maggrad_manual_record_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

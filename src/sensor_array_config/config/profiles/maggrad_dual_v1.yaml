@@ -1,0 +1,16 @@
+{
+  "name": "maggrad_dual_v1",
+  "firmware_protocol": "maggrad_binary_v1",
+  "default_array_config": "qmc6309_12ch_v1",
+  "default_imu_config": "icm42670",
+  "array_configs": {
+    "qmc6309": "qmc6309_12ch_v1",
+    "ak09973d": "ak09973d_12ch_v1",
+    "tmag3001": "tmag3001_12ch_v1"
+  },
+  "startup_sensors": {
+    "qmc6309_12ch_v1": "ALL",
+    "ak09973d_12ch_v1": "AK_ICM",
+    "tmag3001_12ch_v1": "TMAG_ICM"
+  }
+}

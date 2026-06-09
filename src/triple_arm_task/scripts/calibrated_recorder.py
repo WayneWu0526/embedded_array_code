@@ -5,9 +5,9 @@ import rospy
 import moveit_commander
 import geometry_msgs.msg
 import json
-import os
 import datetime
 import threading
+from pathlib import Path
 from serial_processor.srv import GetHallData
 from triple_arm_task.msg import ScanData
 from std_msgs.msg import Header
@@ -34,12 +34,13 @@ class CalibratedRecorder:
         self.pose_lock = threading.Lock()
         
         # JSON 日志设置
-        self.data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
-        if not os.path.exists(self.data_dir):
-            os.makedirs(self.data_dir)
+        package_root = Path(__file__).resolve().parents[1]
+        workspace_root = package_root.parents[1]
+        self.data_dir = workspace_root / 'data' / 'triple_arm_task'
+        self.data_dir.mkdir(parents=True, exist_ok=True)
             
         timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.json_filename = os.path.join(self.data_dir, f"calibrated_record_{timestamp_str}.json")
+        self.json_filename = self.data_dir / f"calibrated_record_{timestamp_str}.json"
         self.scan_results = []
         self.count = 0
         
@@ -167,27 +168,6 @@ class CalibratedRecorder:
             except Exception as e:
                 rospy.logerr(f"采样循环异常: {e}")
                 break
-                        },
-                        "arm2": {
-                            "position": [arm2_pose.position.x, arm2_pose.position.y, arm2_pose.position.z],
-                            "orientation": [arm2_pose.orientation.x, arm2_pose.orientation.y, arm2_pose.orientation.z, arm2_pose.orientation.w]
-                        }
-                    },
-                    "hall_data": [{"x": s.x, "y": s.y, "z": s.z} for s in hall_resp.sensors]
-                }
-                self.scan_results.append(entry)
-                self.count += 1
-                
-                # 周期性增量保存，防止程序异常崩溃丢失大量数据
-                if self.count % self.save_interval == 0:
-                    self.save_json()
-                    rospy.loginfo(f"已采集并保存 {self.count} 组数据...")
-                
-            except Exception as e:
-                rospy.logwarn(f"在第 {self.count} 次采集时发生错误: {e}")
-                
-            rate.sleep()
-            
         if self.count >= self.max_samples:
             rospy.loginfo("达到预设采样总数，正在自动关闭节点...")
             rospy.signal_shutdown("Max samples reached")

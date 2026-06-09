@@ -18,7 +18,7 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
 )
 
-# Python scripts go in scripts/
-# ROS nodes go in nodes/
-# Launch files go in launch/
-
+catkin_install_python(PROGRAMS
+  scripts/calibration_affine_model.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)

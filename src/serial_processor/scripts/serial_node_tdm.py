@@ -17,12 +17,11 @@ import threading
 import math
 import glob
 import os
-import json
 import numpy as np
 from std_msgs.msg import Header, Float32MultiArray, Bool, String
 from datetime import datetime
 from serial_processor.msg import SensorData, StmUplink, StmDownlink
-from sensor_array_config import get_config, SensorArrayConfig
+from sensor_array_config import ArrayConfig, get_array_config
 
 
 class ManualRecorder:
@@ -143,18 +142,31 @@ class SerialNodeTDM:
         # Parameters
         self.port = self._resolve_serial_port(rospy.get_param('~port', '/dev/ttyACM'))
         self.baudrate = rospy.get_param('~baudrate', 921600)
-        float_endian = str(rospy.get_param('~sensor_float_endian', 'little')).lower()
-        self.float_endian = '<' if float_endian in ('little', 'le', '<') else '>'
-        self.float_endian_name = 'little' if self.float_endian == '<' else 'big'
 
         # Load sensor array configuration
-        self._sensor_type = rospy.get_param('~sensor_type', 'QMC6309')
-        self._sensor_config: SensorArrayConfig = get_config(self._sensor_type)
-        self._adu_to_gs = self._sensor_config.manifest.adu_to_gs
-        rospy.loginfo(f"Using sensor type: {self._sensor_type}")
+        self._array_config_name = rospy.get_param('~array_config', 'qmc6309_12ch_v1')
+        self._sensor_config: ArrayConfig = get_array_config(self._array_config_name)
+        self._adu_to_gs = self._sensor_config.adu_to_gs
+        self._frame_id = self._sensor_config.manifest.frame_id
+        rospy.loginfo(
+            f"Using array_config: {self._array_config_name}, "
+            f"n_sensors={self._sensor_config.manifest.n_sensors}"
+        )
 
         # Manual record parameters
-        self.output_dir = os.path.expanduser(rospy.get_param('~output_dir', '~/embedded_array_ws/src/sensor_data_collection/data'))
+        default_output_dir = os.path.abspath(os.path.join(
+            os.path.dirname(__file__),
+            '..',
+            '..',
+            '..',
+            'data',
+            'serial_processor',
+            'tdm_manual_record',
+        ))
+        self.output_dir = os.path.expanduser(rospy.get_param(
+            '~output_dir',
+            default_output_dir,
+        ))
         self.frames_to_average = int(rospy.get_param('~frames_to_average', 10))
         os.makedirs(self.output_dir, exist_ok=True)
         rospy.loginfo(f"Manual record output directory: {self.output_dir}")
@@ -184,7 +196,11 @@ class SerialNodeTDM:
         rospy.loginfo(f"Loaded affine model calibration for {len(self.D_matrix)} sensors from config")
 
         # Initialize manual recorder
-        self.recorder = ManualRecorder(self.output_dir, self.frames_to_average)
+        self.recorder = ManualRecorder(
+            self.output_dir,
+            self.frames_to_average,
+            n_sensors=self._sensor_config.manifest.n_sensors,
+        )
         # Subscribe to own stm_uplink_raw for recording (self-subscribe)
         self.sub_record = rospy.Subscriber('stm_uplink_raw', StmUplink, self._on_uplink_raw_record)
         # Subscribe to trigger
@@ -197,7 +213,7 @@ class SerialNodeTDM:
 
         rospy.loginfo(
             f"SerialNodeTDM initialized: {self.port} at {self.baudrate} baud, "
-            f"sensor_float_endian={self.float_endian_name}"
+            f"array_config={self._array_config_name}"
         )
 
         # Register shutdown handler
@@ -228,36 +244,23 @@ class SerialNodeTDM:
         return port
 
     def _load_sensor_array_params(self):
-        """Load d_list and R_CORR orientation alignment from SensorArrayConfig."""
-        try:
-            hw = self._sensor_config.hardware
-            self._d_list = np.array(hw.d_list)
-            manifest = self._sensor_config.manifest
-            self._n_sensors = manifest.n_sensors
-            self._n_groups = manifest.n_groups
-            self._sensors_per_group = manifest.sensors_per_group
-            r_corr_entries = hw.R_CORR
-            # Build R_CORR dict: sensor_id -> np.array(3x3)
-            # Each R_CORR entry has sensor_ids and a 9-element matrix
-            self.R_CORR = {}
-            for entry in r_corr_entries:
-                mat = np.array(entry.matrix).reshape(3, 3, order='F')
-                for sid in entry.sensor_ids:
-                    self.R_CORR[sid] = mat
-            self._sensor_to_group = {}
-            for idx, entry in enumerate(r_corr_entries):
-                for sid in entry.sensor_ids:
-                    self._sensor_to_group[sid] = idx + 1
-            rospy.loginfo(f"Loaded sensor array params: {self._n_sensors} sensors, {self._n_groups} groups")
-        except Exception as e:
-            rospy.logwarn(f"Failed to load sensor array params: {e}")
-            # Fallback: will use empty configs
-            self._d_list = np.array([])
-            self._n_sensors = 0
-            self._n_groups = 0
-            self._sensors_per_group = 0
-            self.R_CORR = {}
-            self._sensor_to_group = {}
+        """Load d_list and R_CORR orientation alignment from ArrayConfig."""
+        hw = self._sensor_config.hardware
+        self._d_list = np.array(hw.d_list)
+        manifest = self._sensor_config.manifest
+        self._n_sensors = manifest.n_sensors
+        self._n_groups = manifest.n_groups
+        self._sensors_per_group = manifest.sensors_per_group
+        self.R_CORR = {}
+        for entry in hw.R_CORR:
+            mat = np.array(entry.matrix).reshape(3, 3, order='F')
+            for sid in entry.sensor_ids:
+                self.R_CORR[sid] = mat
+        self._sensor_to_group = {}
+        for idx, entry in enumerate(hw.R_CORR):
+            for sid in entry.sensor_ids:
+                self._sensor_to_group[sid] = idx + 1
+        rospy.loginfo(f"Loaded sensor array params: {self._n_sensors} sensors, {self._n_groups} groups")
 
     def _on_record_trigger(self, msg):
         """Handle record trigger (Bool)."""
@@ -405,7 +408,7 @@ class SerialNodeTDM:
 
             # Create message
             msg = StmUplink()
-            msg.header = Header(stamp=rospy.Time.now(), frame_id='hall_array_frame')
+            msg.header = Header(stamp=rospy.Time.now(), frame_id=self._frame_id)
             msg.cycle_id = cycle_id
             msg.slot = slot
             msg.bitmap = bitmap

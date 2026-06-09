@@ -2,10 +2,10 @@
 <package format="2">
   <name>calibration</name>
   <version>0.0.0</version>
-  <description>The calibration package for sensor array system</description>
+  <description>Calibration utilities for Mi-Gels sensor arrays.</description>
 
-  <maintainer email="zhang@todo.todo">zhang</maintainer>
-  <license>TODO</license>
+  <maintainer email="maintainers@example.com">Mi-Gels Maintainers</maintainer>
+  <license>MIT</license>
 
   <buildtool_depend>catkin</buildtool_depend>
 
@@ -16,6 +16,7 @@
   <depend>trajectory_msgs</depend>
   <depend>control_msgs</depend>
   <depend>sensor_data_collection</depend>
+  <depend>sensor_array_config</depend>
 
   <export>
   </export>

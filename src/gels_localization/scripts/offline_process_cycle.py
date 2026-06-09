@@ -190,7 +190,7 @@ def main():
     # Default path
     default_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        '..', '..', 'sensor_data_collection', 'result', 'cycle_0000.json'
+        '..', '..', '..', 'data', 'sensor_data_collection', 'legacy_tdm', 'cycle_0000.json'
     )
     default_path = os.path.normpath(default_path)
 

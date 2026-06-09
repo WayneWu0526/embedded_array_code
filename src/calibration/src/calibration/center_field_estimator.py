@@ -1,11 +1,6 @@
 import numpy as np
-import sys
-from pathlib import Path
 
-# Add calibration lib path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
-
-from sensor_array_config.base import get_config
+from sensor_array_config import get_array_config
 
 
 def null(A: np.ndarray, rcond: float = 1e-10) -> np.ndarray:
@@ -25,13 +20,14 @@ class CenterFieldEstimator:
 
     def __init__(self, sensor_config=None, sensor_ids=None):
         if sensor_config is None:
-            sensor_config = get_config("QMC6309")
+            sensor_config = get_array_config("qmc6309_12ch_v1")
         self.sensor_config = sensor_config
         self.full_d_list = np.array(sensor_config.hardware.d_list)  # (12, 3)
+        self.n_sensors = int(sensor_config.manifest.n_sensors)
 
         # Default: all 12 sensors
         if sensor_ids is None:
-            sensor_ids = list(range(1, 13))
+            sensor_ids = list(range(1, self.n_sensors + 1))
 
         # Validate sensor_ids
         self._validate_sensor_ids(sensor_ids)
@@ -57,9 +53,11 @@ class CenterFieldEstimator:
         seen = set()
         for sid in sensor_ids:
             if not isinstance(sid, int):
-                raise ValueError(f"sensor_ids must be integers in 1-12, got {type(sid).__name__}")
-            if sid < 1 or sid > 12:
-                raise ValueError(f"Sensor ID {sid} not found. Available: 1-12")
+                raise ValueError(
+                    f"sensor_ids must be integers in 1-{self.n_sensors}, got {type(sid).__name__}"
+                )
+            if sid < 1 or sid > self.n_sensors:
+                raise ValueError(f"Sensor ID {sid} not found. Available: 1-{self.n_sensors}")
             if sid in seen:
                 raise ValueError(f"Duplicate sensor IDs: {sensor_ids}")
             seen.add(sid)
@@ -83,25 +81,6 @@ class CenterFieldEstimator:
                 )
         else:
             self.w = (Q @ g) / g_norm_sq  # (N, 1)
-
-    def apply_r_corr(self, b_raw):
-        """Compatibility no-op.
-
-        Raw calibration data is expected to be orientation-aligned before it reaches this
-        estimator: STM payloads are converted from ADU to Gs and R_CORR is applied
-        in serial_processor. Keep this method so older scripts that call it still
-        receive the same shaped array, but do not apply R_CORR here.
-
-        Args:
-            b_raw: (N, 3) or (N*3,) orientation-aligned raw sensor readings
-
-        Returns:
-            (N, 3) orientation-aligned raw sensor readings
-        """
-        N = len(self.sensor_ids)
-        if b_raw.ndim == 1:
-            b_raw = b_raw.reshape(N, 3)
-        return b_raw
 
     def estimate_from_row(self, b_raw_row):
         """Estimate center field for a single row.
@@ -134,7 +113,7 @@ class CenterFieldEstimator:
             (N_selected, 3) raw data for selected sensors only
         """
         if b_raw.ndim == 1:
-            b_raw = b_raw.reshape(12, 3)
+            b_raw = b_raw.reshape(self.n_sensors, 3)
         # self.sensor_ids is 1-indexed, convert to 0-indexed
         indices = [sid - 1 for sid in self.sensor_ids]
         return b_raw[indices]  # (N_selected, 3)

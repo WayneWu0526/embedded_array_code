@@ -20,13 +20,13 @@
 
   <arg name="port" default="auto"/>
   <arg name="baudrate" default="115200"/>
-  <arg name="sensor_type" default="QMC6309"/>
-  <arg name="sensor_float_endian" default="little"/>
-  <arg name="output_dir" default="~/embedded_array_ws_Mi-Gels/src/sensor_data_collection/data"/>
+  <arg name="profile" default="maggrad_dual_v1"/>
+  <arg name="array_config" default="qmc6309_12ch_v1"/>
+  <arg name="imu_config" default="icm42670"/>
+  <arg name="output_dir" default="$(find sensor_data_collection)/../../data"/>
   <arg name="startup_strategy" default="cont"/>
   <arg name="startup_sensors" default="auto"/>
   <arg name="trigger_rate_hz" default="100"/>
-  <arg name="imu_config" default="$(find sensor_data_collection)/config/icm42670.yaml"/>
   <arg name="collection_config" default="$(find sensor_data_collection)/config/maggrad_continuous_collection.yaml"/>
   <arg name="signal_config" default="$(find sensor_data_collection)/config/signal_params_maggrad_continuous.yaml"/>
   <arg name="record_tf" default="true"/>
@@ -43,10 +43,11 @@
   </node>
 
   <node name="serial_node_maggrad" pkg="serial_processor" type="serial_node_maggrad.py" output="screen">
-    <rosparam file="$(arg imu_config)" command="load"/>
     <param name="port" value="$(arg port)"/>
     <param name="baudrate" value="$(arg baudrate)"/>
-    <param name="sensor_type" value="$(arg sensor_type)"/>
+    <param name="profile" value="$(arg profile)"/>
+    <param name="array_config" value="$(arg array_config)"/>
+    <param name="imu_config" value="$(arg imu_config)"/>
     <param name="output_dir" value="$(arg output_dir)"/>
     <param name="startup_strategy" value="$(arg startup_strategy)"/>
     <param name="startup_sensors" value="$(arg startup_sensors)"/>

@@ -12,7 +12,7 @@
          ee_link: End effector link to use as the start position base
     -->
     <node name="execute_trajectory_node" pkg="triple_arm_visual_servo" type="execute_trajectory.py" output="screen">
-        <param name="trajectory_file" value="$(find triple_arm_visual_servo)/config/trajectories/ring_12.json"/>
+        <param name="trajectory_file" value="$(find triple_arm_visual_servo)/config/trajectories/ring_p12_r0.120.json"/>
         <param name="relative_scale" value="1"/>
         <param name="ee_link" value="diana7_ee_link"/>
     </node>

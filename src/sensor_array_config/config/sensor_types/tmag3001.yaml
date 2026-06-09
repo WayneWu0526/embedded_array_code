@@ -1,0 +1,9 @@
+{
+  "name": "TMAG3001",
+  "manufacturer": "Texas Instruments",
+  "bit_width": 16,
+  "range_gs": 400.0,
+  "adu_to_gs": 0.011299435028248588,
+  "gs_to_tesla": 0.0001,
+  "notes": "TMAG3001 40 mT range uses 885 LSB/mT; Gs = raw * 10 / 885."
+}

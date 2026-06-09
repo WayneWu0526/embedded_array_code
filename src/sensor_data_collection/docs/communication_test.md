@@ -17,7 +17,7 @@
 ### 步骤1: 启动 roscore
 
 ```bash
-cd /home/zhang/embedded_array_ws
+cd ~/embedded_array_ws_Mi-Gels
 source devel/setup.bash
 roscore
 ```
@@ -33,7 +33,7 @@ serial_node_tdm.py 负责：
 ```bash
 # 需要先 source zlab_robots (signal_generator dependency)
 source ~/zlab_robots/devel/setup.bash
-source /home/zhang/embedded_array_ws/devel/setup.bash
+source ~/embedded_array_ws_Mi-Gels/devel/setup.bash
 
 rosrun serial_processor serial_node_tdm.py \
     port:=/dev/ttyACM0 \
@@ -55,7 +55,7 @@ Waiting for STM32 initialization...
 手动发布一个 StmDownlink 消息来测试下行通道：
 
 ```bash
-source /home/zhang/embedded_array_ws/devel/setup.bash
+source ~/embedded_array_ws_Mi-Gels/devel/setup.bash
 
 rostopic pub /stm_downlink serial_processor/StmDownlink "{mode: 1, bitmap: 4095, settling_time: 6000, cycle_time: 28800}" -1
 ```
@@ -126,7 +126,7 @@ PC                              STM32
 监听 `/stm_uplink` 主题，检查 STM32 是否正常响应：
 
 ```bash
-source /home/zhang/embedded_array_ws/devel/setup.bash
+source ~/embedded_array_ws_Mi-Gels/devel/setup.bash
 rostopic echo /stm_uplink
 ```
 
@@ -151,9 +151,9 @@ cycle_end: 0       # slot 3 时为 1
 
 ```bash
 source ~/zlab_robots/devel/setup.bash
-source /home/zhang/embedded_array_ws/devel/setup.bash
+source ~/embedded_array_ws_Mi-Gels/devel/setup.bash
 
-roslaunch sensor_data_collection data_collection.launch
+roslaunch "$(rospack find sensor_data_collection)/launch/legacy/data_collection.launch"
 ```
 
 **预期日志输出:**
@@ -178,10 +178,10 @@ roslaunch sensor_data_collection data_collection.launch
 
 ```bash
 # 查看生成的文件
-ls ~/sensor_data/cycle_*.json
+ls data/sensor_data_collection/legacy_tdm/cycle_*.json
 
 # 查看 JSON 结构
-cat ~/sensor_data/cycle_0000.json
+cat data/sensor_data_collection/legacy_tdm/cycle_0000.json
 ```
 
 **预期 JSON 结构:**
@@ -255,7 +255,7 @@ sudo usermod -a -G dialout $USER
 | data_collection_node.py | `src/sensor_data_collection/scripts/` | 数据采集节点 |
 | StmDownlink.msg | `src/serial_processor/msg/` | 下行消息定义 |
 | StmUplink.msg | `src/serial_processor/msg/` | 上行消息定义 |
-| data_collection.launch | `src/sensor_data_collection/launch/` | 启动文件 |
+| data_collection.launch | `src/sensor_data_collection/launch/legacy/` | 启动文件 |
 
 ---
 

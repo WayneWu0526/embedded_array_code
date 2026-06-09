@@ -29,14 +29,14 @@ from plot_cycle_pose import (
 
 
 DEFAULT_RESULT_DIRS = [
-    Path("src/sensor_data_collection/result_merged_all"),
+    Path("data/archive/sensor_data_collection/result_merged_all"),
 ]
 DEFAULT_SAVE_PATH = Path(
-    "src/sensor_data_collection/plot/merged_ground_truth_error_scatter/"
+    "data/archive/sensor_data_collection/plot/merged_ground_truth_error_scatter/"
     "merged_ground_truth_error_scatter.png"
 )
 DEFAULT_BATCH_SAVE_DIR = Path(
-    "src/sensor_data_collection/plot/merged_ground_truth_error_scatter/"
+    "data/archive/sensor_data_collection/plot/merged_ground_truth_error_scatter/"
     "sensor_method_xy_xz"
 )
 DEFAULT_MAX_POSITION_ERROR_MM = 50.0

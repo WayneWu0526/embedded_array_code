@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import csv
 import yaml
-import os
+from pathlib import Path
 
 def quat2mat(q):
     qx, qy, qz, qw = q
@@ -18,14 +18,16 @@ def quat2mat(q):
     ])
 
 def main():
-    path_file = '/home/zhang/embedded_array_ws/src/triple_arm_task/config/paths/current_path.csv'
-    config_file = '/home/zhang/embedded_array_ws/src/triple_arm_task/config/start_positions.yaml'
+    package_root = Path(__file__).resolve().parents[1]
+    workspace_root = package_root.parents[1]
+    path_file = package_root / 'config' / 'paths' / 'current_path.csv'
+    config_file = package_root / 'config' / 'start_positions.yaml'
     
-    if not os.path.exists(path_file) or not os.path.exists(config_file):
+    if not path_file.exists() or not config_file.exists():
         print(f"Error: path_file or config_file not found.")
         return
 
-    with open(config_file, 'r') as f:
+    with config_file.open('r') as f:
         config = yaml.safe_load(f)
     diana7_start = config['start_positions']['diana7']
     start_pos = np.array(diana7_start['position'])
@@ -34,7 +36,7 @@ def main():
 
     points = []
     quats = []
-    with open(path_file, 'r') as f:
+    with path_file.open('r') as f:
         reader = csv.DictReader(f)
         for row in reader:
             points.append([float(row['x']), float(row['y']), float(row['z'])])
@@ -98,7 +100,9 @@ def main():
     ax.set_zlim(mid_z - max_range, mid_z + max_range)
 
     plt.tight_layout()
-    output_png = '/home/zhang/embedded_array_ws/src/triple_arm_task/config/paths/trajectory_preview.png'
+    output_dir = workspace_root / 'data' / 'archive' / 'triple_arm_task' / 'path_previews'
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_png = output_dir / 'trajectory_preview.png'
     plt.savefig(output_png)
     print(f"Success: Visualization saved to {output_png}")
 

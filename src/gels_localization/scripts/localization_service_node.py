@@ -29,7 +29,7 @@ if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 
 from maps_estimator import MaPS_Estimator
-from sensor_array_config import get_config, SensorArrayConfig
+from sensor_array_config import ArrayConfig, get_array_config
 
 # ROS imports - optional for standalone testing
 try:
@@ -43,17 +43,17 @@ except ImportError:
     LocalizeCycleResponse = None
 
 
-# Load sensor type from rosparam (if ROS is available, otherwise default)
-_SENSOR_TYPE = 'QMC6309'
-_SENSOR_CONFIG: SensorArrayConfig = None
+# Load array config from rosparam (if ROS is available, otherwise default)
+_ARRAY_CONFIG_NAME = 'qmc6309_12ch_v1'
+_ARRAY_CONFIG: ArrayConfig = None
 
-def _get_sensor_config():
-    global _SENSOR_CONFIG, _SENSOR_TYPE
-    if _SENSOR_CONFIG is None:
+def _get_array_config():
+    global _ARRAY_CONFIG, _ARRAY_CONFIG_NAME
+    if _ARRAY_CONFIG is None:
         if ROS_AVAILABLE:
-            _SENSOR_TYPE = rospy.get_param('~sensor_type', 'QMC6309')
-        _SENSOR_CONFIG = get_config(_SENSOR_TYPE)
-    return _SENSOR_CONFIG
+            _ARRAY_CONFIG_NAME = rospy.get_param('~array_config', 'qmc6309_12ch_v1')
+        _ARRAY_CONFIG = get_array_config(_ARRAY_CONFIG_NAME)
+    return _ARRAY_CONFIG
 
 
 # =============================================================================
@@ -68,17 +68,11 @@ MOMENT_LIST = None  # Magnetic moment for each source (slot)
 GS_TO_TESLA = 1.0e-4  # Unit conversion factor
 
 
-def load_configuration(yaml_path=None):
-    """
-    Load sensor calibration parameters from sensor_array_config.
-
-    Args:
-        yaml_path: Deprecated. Kept for backward compatibility but ignored.
-                   Configuration now comes from sensor_array_config package.
-    """
+def load_configuration():
+    """Load sensor calibration parameters from sensor_array_config."""
     global D_LIST, GS_TO_TESLA
 
-    config = _get_sensor_config()
+    config = _get_array_config()
 
     # D_LIST from hardware params (n_sensors x 3), indexed as D_LIST[sensor_idx, :]
     hw = config.hardware
@@ -87,7 +81,7 @@ def load_configuration(yaml_path=None):
     # GS_TO_TESLA from config
     GS_TO_TESLA = config.gs_to_si
 
-    print(f"[INFO] Configuration loaded for sensor type: {_SENSOR_TYPE}")
+    print(f"[INFO] Configuration loaded for array_config: {_ARRAY_CONFIG_NAME}")
     print(f"[INFO] D_LIST shape: {D_LIST.shape}, GS_TO_TESLA: {GS_TO_TESLA}")
 
 def quaternion_z_axis(q):
@@ -430,10 +424,10 @@ def main():
     rospy.loginfo("GELS Localization service started (FRAMEWORK MODE)")
 
     # Initialize sensor config from rosparam
-    global _SENSOR_TYPE, _SENSOR_CONFIG
-    _SENSOR_TYPE = rospy.get_param('~sensor_type', 'QMC6309')
-    _SENSOR_CONFIG = get_config(_SENSOR_TYPE)
-    rospy.loginfo(f"Using sensor type: {_SENSOR_TYPE}")
+    global _ARRAY_CONFIG_NAME, _ARRAY_CONFIG
+    _ARRAY_CONFIG_NAME = rospy.get_param('~array_config', 'qmc6309_12ch_v1')
+    _ARRAY_CONFIG = get_array_config(_ARRAY_CONFIG_NAME)
+    rospy.loginfo(f"Using array_config: {_ARRAY_CONFIG_NAME}")
 
     # Load configuration
     load_configuration()

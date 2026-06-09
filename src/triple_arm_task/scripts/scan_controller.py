@@ -8,6 +8,7 @@ import json
 import csv
 import os
 import datetime
+from pathlib import Path
 from serial_processor.srv import GetHallData
 from triple_arm_task.msg import ScanData
 from std_msgs.msg import Header
@@ -36,12 +37,13 @@ class TripleArmScanner:
         self.optimize_frequency = rospy.get_param('~optimize_frequency', 10)
         
         # JSON Logging Setup
-        self.data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
-        if not os.path.exists(self.data_dir):
-            os.makedirs(self.data_dir)
-            
+        package_root = Path(__file__).resolve().parents[1]
+        workspace_root = package_root.parents[1]
+        self.data_dir = workspace_root / 'data' / 'triple_arm_task'
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+
         timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.json_filename = os.path.join(self.data_dir, f"scan_results_{timestamp_str}.json")
+        self.json_filename = self.data_dir / f"scan_results_{timestamp_str}.json"
         self.scan_results = []
         
         rospy.loginfo(f"Data logging initialized to {self.json_filename}")

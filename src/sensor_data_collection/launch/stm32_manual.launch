@@ -1,52 +1,63 @@
 <launch>
-  <!-- STM32 Manual Mode Launch File -->
-  <!-- 仅启动STM32下位机，手动操作模式 -->
+  <!-- STM32 Manual Calibration Capture for MagGrad firmware -->
+  <!-- 仅启动 STM32 新固件串口节点和手动平均记录节点 -->
   <!--
     手动采集功能：
-    - 触发话题: /serial_node_tdm/record_trigger (std_msgs/Bool)
+    - 触发话题: /maggrad_manual_record/record_trigger (std_msgs/Bool)
     - True  = 开始录制（创建新 CSV 文件 manual_record_{timestamp}.csv）
-    - False = 暂停录制（文件保持打开）
-    - 再次 True = 创建新的 CSV 文件（自动切换）
+    - False = 停止录制并关闭文件
     - 数据源: stm_uplink_raw (raw 数据：ADU/bit -> Gs + R_CORR 方位统一，未做 calibration)
-    - 输出: ~/embedded_array_ws/src/sensor_data_collection/data/manual_record_*.csv
+    - 输出: $(arg output_dir)/manual_record_*.csv
     - 格式: CSV (sensor_1_x,sensor_1_y,sensor_1_z,...,sensor_12_z)
     - 平均: 每 frames_to_average 条消息平均后写入一行
 
     参数:
     - output_dir: CSV 输出目录
     - frames_to_average: 每行平均的帧数（默认 10）
-    - capture_output_filename: (已废弃，保留兼容)
+    - startup_strategy: 新固件启动模式，默认 cont，会发送 MODE CONT
 
     使用示例:
       # 开始录制
-      rostopic pub /serial_node_tdm/record_trigger std_msgs/Bool "data: true"
-      # 停止录制（文件保持打开）
-      rostopic pub /serial_node_tdm/record_trigger std_msgs/Bool "data: false"
-      # 再次开始（创建新文件）
-      rostopic pub /serial_node_tdm/record_trigger std_msgs/Bool "data: true"
+      rostopic pub /maggrad_manual_record/record_trigger std_msgs/Bool "data: true" -1
+      # 停止录制
+      rostopic pub /maggrad_manual_record/record_trigger std_msgs/Bool "data: false" -1
   -->
 
   <!-- Arguments -->
-  <arg name="port" default="/dev/ttyACM"/>
-  <arg name="baudrate" default="921600"/>
-  <arg name="sensor_type" default="QMC6309"/>
-  <arg name="sensor_float_endian" default="little"/>
-  <arg name="output_dir" default="~/embedded_array_ws/src/sensor_data_collection/data"/>
+  <arg name="port" default="auto"/>
+  <arg name="baudrate" default="115200"/>
+  <arg name="profile" default="maggrad_dual_v1"/>
+  <arg name="array_config" default="qmc6309_12ch_v1"/>
+  <arg name="imu_config" default="icm42670"/>
+  <arg name="n_sensors" default="12"/>
+  <arg name="output_dir" default="$(find sensor_data_collection)/../../data/manual_calibration"/>
   <arg name="frames_to_average" default="10"/>
-  <arg name="capture_output_filename" default="manual_capture.csv"/>
+  <arg name="startup_strategy" default="cont"/>
+  <arg name="startup_sensors" default="auto"/>
+  <arg name="trigger_rate_hz" default="100"/>
+  <arg name="input_topic" default="stm_uplink_raw"/>
 
-  <!-- Hall Sensor Serial Node (TDM Binary Protocol) - Manual Mode -->
-  <node name="serial_node_tdm" pkg="serial_processor" type="serial_node_tdm.py" output="screen">
+  <!-- STM32 MagGrad firmware serial node -->
+  <node name="serial_node_maggrad" pkg="serial_processor" type="serial_node_maggrad.py" output="screen">
     <param name="port" value="$(arg port)"/>
     <param name="baudrate" value="$(arg baudrate)"/>
-    <param name="sensor_float_endian" value="$(arg sensor_float_endian)"/>
-    <param name="sensor_type" value="$(arg sensor_type)"/>
+    <param name="profile" value="$(arg profile)"/>
+    <param name="array_config" value="$(arg array_config)"/>
+    <param name="imu_config" value="$(arg imu_config)"/>
     <param name="output_dir" value="$(arg output_dir)"/>
-    <param name="frames_to_average" value="$(arg frames_to_average)"/>
-    <param name="capture_output_filename" value="$(arg capture_output_filename)"/>
+    <param name="startup_strategy" value="$(arg startup_strategy)"/>
+    <param name="startup_sensors" value="$(arg startup_sensors)"/>
+    <param name="trigger_rate_hz" value="$(arg trigger_rate_hz)"/>
   </node>
 
-  <!-- Auto-send manual mode initialization command -->
-  <node name="stm32_init" pkg="serial_processor" type="stm32_init.py" output="screen"/>
+  <!-- Manual affine-calibration CSV recorder.
+       Keeps the old manual_record_*.csv column format expected by calibration scripts. -->
+  <node name="maggrad_manual_record" pkg="sensor_data_collection"
+        type="maggrad_manual_record_node.py" output="screen">
+    <param name="output_dir" value="$(arg output_dir)"/>
+    <param name="frames_to_average" value="$(arg frames_to_average)"/>
+    <param name="n_sensors" value="$(arg n_sensors)"/>
+    <param name="input_topic" value="$(arg input_topic)"/>
+  </node>
 
 </launch>

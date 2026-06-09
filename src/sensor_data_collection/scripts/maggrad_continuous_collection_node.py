@@ -173,9 +173,12 @@ class MagGradContinuousCollectionNode:
         rospy.init_node("maggrad_continuous_collection_node", anonymous=True)
 
         self.n_sensors = int(rospy.get_param("~n_sensors", 12))
+        default_output_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "..", "data")
+        )
         self.output_dir = rospy.get_param(
             "~output_dir",
-            "~/embedded_array_ws_Mi-Gels/src/sensor_data_collection/data",
+            default_output_dir,
         )
         self.record_format = rospy.get_param("~record_format", "csv")
         self.use_calibrated = self._param_bool(rospy.get_param("~use_calibrated", False))

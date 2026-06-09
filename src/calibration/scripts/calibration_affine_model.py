@@ -16,11 +16,10 @@ Pipeline: b_raw(orientation-aligned, Gs) -> D_i @ b_raw + e_i -> b_corrected
 import numpy as np
 import pandas as pd
 import json
-import sys
 from pathlib import Path
+import argparse
 
-sys.path.insert(0, '/home/zhang/embedded_array_ws/src')
-from calibration.src.calibration.center_field_estimator import CenterFieldEstimator
+from calibration import CenterFieldEstimator
 
 
 def solve_per_sensor(b_corr_all, b_ref_all):
@@ -79,12 +78,41 @@ def delta_o_pre(b_raw_rs, est):
     return Delta_o
 
 
+def build_arg_parser():
+    parser = argparse.ArgumentParser(
+        description="Fit per-sensor affine calibration from manual_record_*.csv files.",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path(__file__).resolve().parents[3] / "data" / "manual_calibration",
+        help="Directory containing manual_record_*.csv files.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=(
+            Path(__file__).resolve().parents[2]
+            / "sensor_array_config"
+            / "config"
+            / "arrays"
+            / "qmc6309_12ch_v1"
+            / "affine_model_params.json"
+        ),
+        help="Output affine_model_params.json path.",
+    )
+    return parser
+
+
 def main():
-    base_dir = '/home/zhang/embedded_array_ws/src/sensor_data_collection/data'
+    args = build_arg_parser().parse_args()
+    base_dir = args.data_dir
     est = CenterFieldEstimator()
 
     # ── Collect data per CSV (each CSV normalized independently) ───────────────
-    csv_files = sorted(Path(base_dir).glob('manual_record_*.csv'))
+    csv_files = sorted(base_dir.glob('manual_record_*.csv'))
+    if not csv_files:
+        raise FileNotFoundError(f"No manual_record_*.csv files found in {base_dir}")
     configs = {}
     for csv_path in csv_files:
         df = pd.read_csv(csv_path)
@@ -178,13 +206,15 @@ def main():
     print(f"  post (norm train, vs norm b_ref): {df['post_norm_train'].mean():.6f}")
 
     # Save affine calibration JSON
-    cal_out = Path('/home/zhang/embedded_array_ws/src/sensor_array_config/sensor_array_config/config/qmc6309/affine_model_params.json')
-    output = {}
+    cal_out = args.output.expanduser()
+    cal_out.parent.mkdir(parents=True, exist_ok=True)
+    output = {"sensors": []}
     for sid, params in results_norm.items():
-        output[str(sid)] = {
+        output["sensors"].append({
+            'sensor_id': int(sid),
             'D_i': params['D'],
             'e_i': list(np.array(params['e']).flatten())
-        }
+        })
     with open(cal_out, 'w') as f:
         json.dump(output, f, indent=2)
     print(f"Calibration JSON saved to {cal_out}")

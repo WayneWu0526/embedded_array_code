@@ -29,10 +29,13 @@ include_directories(
 )
 
 install(PROGRAMS
+  scripts/calibrated_recorder.py
   scripts/scan_controller.py
   scripts/initialize_scan.py
   scripts/check_collisions.py
+  scripts/check_moveit_setup.py
   scripts/generate_paths.py
+  scripts/visualize_cone.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

@@ -1,0 +1,8 @@
+{
+  "name": "AK09973D",
+  "manufacturer": "AKM",
+  "bit_width": 16,
+  "range_gs": 360.4,
+  "adu_to_gs": 0.01099853515625,
+  "gs_to_tesla": 0.0001
+}

@@ -1,118 +1,108 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working in this repository.
 
 ## Repository Overview
 
-This is a ROS Noetic catkin workspace (`embedded_array_ws`) for a **sensor array data collection system**. The system collects magnetic field sensor data synchronized with robot arm poses for EKF-based pose estimation.
+This is a ROS Noetic catkin workspace for the Mi-Gels magnetic sensor array
+system. The current main path is continuous MagGrad collection from STM32 sensor
+streams, with optional FY8300 signal-generator control and robot/TF context.
 
-### Key Packages
+## Current Package Map
 
-| Package | Purpose |
-|---------|---------|
-| `sensor_data_collection` | Main data collection node - collects Hall sensor data, TF poses, and signal generator status |
-| `serial_processor` | Serial communication bridge with STM32 development board; publishes Hall sensor data via topic and service |
-| `triple_arm_task` | Triple arm exploration/calibration task |
-| `triple_arm_visual_servo` | Visual servo control for robotic arms |
-
-### Hardware Setup
-
-- **ZED2i camera** → USB → PC (visual localization via AprilTag/TagSLAM)
-- **Sensor array** → STM32 → USB → PC (Hall sensor data at 921600 baud)
-- **FY8300 signal generator** → USB → PC (control) + TTL → STM32 (trigger)
+| Package | Role |
+| --- | --- |
+| `sensor_data_collection` | Main MagGrad collection launch/nodes, plus legacy TDM collection under `config/legacy` and `launch/legacy` |
+| `serial_processor` | STM32 serial bridges: MagGrad stream, legacy TDM stream, manual-record tools |
+| `sensor_array_config` | Sensor-array, IMU, and profile configs for QMC6309/AK09973D/TMAG3001 arrays |
+| `calibration` | Calibration utilities and center-field estimator tools |
+| `triple_arm_task` | Triple-arm scan/exploration experiments |
+| `triple_arm_visual_servo` | MoveIt and visual-servo trajectory experiments |
+| `gels_localization` | Legacy/reference GELS localization service and offline analysis |
 
 ## Build Commands
 
-```bash
-# Build zlab_robots first (contains signal_generator dependency)
-cd ~/zlab_robots && catkin build
+Build the related `zlab_robots` workspace first when `signal_generator` or robot
+bringup dependencies are needed:
 
-# Then build embedded_array_ws
-cd /home/zhang/embedded_array_ws
+```bash
+cd ~/zlab_robots
+catkin build
+source devel/setup.bash
+
+cd ~/embedded_array_ws_Mi-Gels
 catkin build
 source devel/setup.bash
 ```
 
-**Note**: `embedded_array_ws` depends on `signal_generator` from `zlab_robots`. Ensure `zlab_robots/devel/setup.bash` is sourced before building.
-
-## Run Commands
+On this Mac workspace, the repository path is usually:
 
 ```bash
-# Data collection (main system)
-roslaunch sensor_data_collection data_collection.launch
-
-# For calibration/localization (separate zlab_robots workspace at ~/zlab_robots)
-roslaunch zlab_robots_calibration localization_tagslam.launch
+cd ~/Developer/embedded_array_ws_Mi-Gels
 ```
 
-## Architecture
+## Main Run Commands
 
-### Data Collection Flow (sensor_data_collection)
+Current MagGrad collection:
 
-1. **Main thread**: ROS callbacks for Hall (~75fps via topic), visual/~10fps TF timer
-2. **Background save thread**: Daemon thread periodically flushes thread-safe `DataBuffer` to temp JSON files every `flush_interval` seconds
-3. **On shutdown**: Merges temp JSON files into final `sensor_data_{timestamp}.json`
+```bash
+roslaunch sensor_data_collection maggrad_continuous_collection.launch \
+  profile:=maggrad_dual_v1 \
+  array_config:=qmc6309_12ch_v1 \
+  imu_config:=icm42670 \
+  output_dir:=$(pwd)/data
+```
 
-Key classes in `data_collection_node.py`:
-- `DataBuffer` - thread-safe deque with 3 channels (hall_data, visual_data, signal_data)
-- `BackgroundSaver` - daemon thread for non-blocking file I/O
-- `DataCollector` - main ROS node
+Start and stop recording:
 
-### TF Frame Hierarchy (reference: lab_table)
+```bash
+rostopic pub /maggrad_continuous_collection/record_trigger std_msgs/Bool "data: true" -1
+rostopic pub /maggrad_continuous_collection/record_trigger std_msgs/Bool "data: false" -1
+```
 
-| Frame | Description |
-|-------|-------------|
-| `diana7_em_tcp_filt` | Diana7 robot end-effector pose (filtered) |
-| `arm1_em_tcp_filt` | Arm1 end-effector pose (filtered) |
-| `arm2_em_tcp_filt` | Arm2 end-effector pose (filtered) |
-| `sensor_array_filt` | Sensor array pose (filtered, ground truth) |
-| `cam0` | ZED2i camera frame |
+Manual STM32 recording helpers:
 
-TF lookup is done at 10fps via `rospy.Timer(rospy.Duration(0.1), ...)`.
+```bash
+./tools/run_stm32_manual_migels.sh
+./tools/manual_record_enter.sh
+```
 
-### PC-STM32 Binary Protocol
+Legacy TDM collection is kept for reference:
 
-Downlink command (8 bytes): Header(0xAA55, 2B) + Version(1B) + Mode(1B) + Bitmap(2B) + SettlingTime(2B)
-- Mode: 0x01=CVT (4 slots), 0x02=CCI (3 slots)
-- SettlingTime: 0.01ms units, range 0~655.35ms
+```bash
+roslaunch sensor_data_collection data_collection.launch
+roslaunch sensor_data_collection test_stm32.launch
+```
 
-Uplink data (variable): Header + Version + cycle_id + slot + Bitmap + Timestamp(8B) + sensor_data(N×13B) + cycle_end
+These launch files resolve through `src/sensor_data_collection/launch/legacy/`.
 
-### Slot-Pose Mapping (TDM - Time Division Multiplexing)
+## Data Policy
 
-Each cycle has multiple slots, where each slot corresponds to a different EM coil activation:
+Do not add new runtime outputs under `src/`. Use one of:
 
-| slot | CVT mode (4 slots) | CCI mode (3 slots) |
-|------|-------------------|-------------------|
-| 0 | diana7_em_tcp_filt pose | diana7_em_tcp_filt pose |
-| 1 | arm1_em_tcp_filt pose | arm1_em_tcp_filt pose |
-| 2 | arm2_em_tcp_filt pose | arm2_em_tcp_filt pose |
-| 3 | sensor_data only | — |
-| cycle_end | sensor_array_filt pose (ground truth) | sensor_array_filt pose (ground truth) |
+- `data/` for normal local experiments and staging inside this workspace.
+- NAS or another external archive for large historical datasets.
 
-PC stores each completed cycle as JSON: `output_dir/cycle_{cycle_id:04d}.json`
+Tracked config files under `src/**/config/` are allowed. Generated CSV, JSONL,
+HTML, PDF, plot outputs, and archived experiment files should stay ignored or
+outside the repository.
 
-### Related Workspace
+## Important Paths
 
-**zlab_robots** (`~/zlab_robots`) is a separate workspace containing:
-- `zlab_robots_calibration` - TagSLAM + AprilTag localization, filter nodes, frame reprojector
-- `signal_generator` - FY8300 signal generator driver (formerly in `instrument_ws`)
-- Runs independently; publishes TF for `diana7_em_tcp`, `arm1_em_tcp`, `arm2_em_tcp`, `sensor_array` (unfiltered) which `sensor_data_collection` subscribes to
+- Current workflow: `docs/mi-gels-workflow.md`
+- Cleanup notes: `docs/repository-cleanup.md`
+- Historical plans/specs: `docs/design-history/`
+- Sensor config guide: `src/sensor_array_config/config/README.md`
+- Legacy protocol docs: `src/sensor_data_collection/README.md`
+- TDM communication test: `src/sensor_data_collection/docs/communication_test.md`
 
-## Key Files
+## Development Notes
 
-- `src/sensor_data_collection/README.md` - Full protocol specification and system documentation
-- `src/sensor_data_collection/scripts/data_collection_node.py` - Main collection node
-- `src/serial_processor/scripts/serial_node.py` - STM32 serial bridge
-- `src/sensor_data_collection/config/task_params.yaml` - Collection parameters (period, cycles, flush_interval)
-- `src/sensor_data_collection/launch/data_collection.launch` - Launch file
-
-## Configuration Parameters (task_params.yaml)
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| period | 1.0s | Duration of each cycle |
-| num_cycles | 10 | Number of cycles to collect |
-| output_dir | ~/sensor_data | JSON output directory |
-| flush_interval | 2.0s | Background save interval |
-| start_with_signal | true | Wait for FY8300 trigger before collecting |
+- For quick Python checks, use `/Users/lawkaho/.venvs/codex/bin/python` unless a
+  project-local virtual environment is clearly required.
+- `sensor_array_config` uses a standard Python src-layout. The Python package is
+  under `src/sensor_array_config/src/sensor_array_config`.
+- Keep `src/CMakeLists.txt` as the catkin top-level symlink. It can appear broken
+  on machines without `/opt/ros/noetic`, but is valid in the ROS Noetic runtime.
+- Prefer fixing actual structure, paths, build metadata, and runtime output
+  locations over adding per-directory README files.

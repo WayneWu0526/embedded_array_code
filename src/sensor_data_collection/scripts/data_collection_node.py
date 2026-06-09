@@ -24,7 +24,7 @@ from serial_processor.srv import GetHallData, GetHallDataResponse
 from std_msgs.msg import Bool, Float64, Empty
 from sensor_data_collection.msg import SlotData, SensorReading
 from sensor_data_collection.srv import LocalizeCycle, LocalizeCycleRequest
-from sensor_array_config import get_config, SensorArrayConfig
+from sensor_array_config import ArrayConfig, get_array_config
 
 
 # Mode constants
@@ -133,9 +133,12 @@ class DataCollector:
         self.manual_trigger = rospy.get_param('~manual_trigger', False)
 
         # Load sensor array configuration
-        self._sensor_type = rospy.get_param('~sensor_type', 'QMC6309')
-        self._sensor_config: SensorArrayConfig = get_config(self._sensor_type)
-        rospy.loginfo(f"Using sensor type: {self._sensor_type}, n_sensors={self._sensor_config.manifest.n_sensors}")
+        self._array_config_name = rospy.get_param('~array_config', 'qmc6309_12ch_v1')
+        self._sensor_config: ArrayConfig = get_array_config(self._array_config_name)
+        rospy.loginfo(
+            f"Using array_config: {self._array_config_name}, "
+            f"n_sensors={self._sensor_config.manifest.n_sensors}"
+        )
 
         # Parameters
         self.num_cycles = int(rospy.get_param('~num_cycles', 10))
@@ -145,8 +148,15 @@ class DataCollector:
         elif self.num_cycles > 255:
             rospy.logwarn("num_cycles exceeds uint8 range, clamping to 255 for cycle_num")
             self.num_cycles = 255
-        self.output_dir = rospy.get_param('~output_dir',
-                                          os.path.join(os.path.dirname(os.path.dirname(__file__)), '/home/zhang/embedded_array_ws/src/sensor_data_collection/result'))
+        default_output_dir = os.path.abspath(os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            '..',
+            '..',
+            'data',
+            'sensor_data_collection',
+            'legacy_tdm',
+        ))
+        self.output_dir = rospy.get_param('~output_dir', default_output_dir)
 
         # Convert mode to integer: rosparam may load as string "CVT"/"CCI" or int
         mode_raw = rospy.get_param('~mode', MODE_CVT)

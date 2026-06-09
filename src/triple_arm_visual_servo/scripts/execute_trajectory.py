@@ -152,8 +152,12 @@ def main():
         return
 
     # 读取参数或使用默认轨迹文件路径
-    default_path = \
-        "/home/zhang/embedded_array_ws/src/triple_arm_visual_servo/config/trajectories/ring_12.json"
+    default_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "config",
+        "trajectories",
+        "ring_p12_r0.120.json",
+    )
     traj_file = rospy.get_param("~trajectory_file", default_path)
     ee_link = rospy.get_param("~ee_link", "diana7_ee_link")
     scale = float(rospy.get_param("~relative_scale", 0.5))
