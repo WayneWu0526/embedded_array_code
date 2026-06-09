@@ -69,7 +69,7 @@ class CenterFieldEstimator:
         Q = null(D_cal)
         ones_N = np.ones((N, 1))
         g = Q.T @ ones_N
-        g_norm_sq = float(g.T @ g)
+        g_norm_sq = float((g.T @ g).item())
         if g_norm_sq < 1e-10:
             # Fallback for N=3 case (zero null space): use uniform weights
             if N == 3:
@@ -86,7 +86,7 @@ class CenterFieldEstimator:
         """Estimate center field for a single row.
 
         Args:
-            b_raw_row: (36,) or (12, 3) raw sensor data for ALL 12 sensors.
+            b_raw_row: (n_sensors*3,) or (n_sensors, 3) raw sensor data for all sensors.
                         Only sensors in self.sensor_ids are used.
 
         Returns:
@@ -107,7 +107,7 @@ class CenterFieldEstimator:
         """Filter raw data to only include selected sensor columns.
 
         Args:
-            b_raw: (36,) or (12, 3) raw data for all 12 sensors
+            b_raw: (n_sensors*3,) or (n_sensors, 3) raw data for all sensors
 
         Returns:
             (N_selected, 3) raw data for selected sensors only
@@ -128,8 +128,9 @@ class CenterFieldEstimator:
             b_hats: (N, 3) center field estimates
             b_corr: (N, N_selected, 3) orientation-aligned raw sensor readings
         """
-        if b_raw.ndim == 2 and b_raw.shape[1] == 36:
-            b_raw = b_raw.reshape(b_raw.shape[0], 12, 3)
+        expected_cols = self.n_sensors * 3
+        if b_raw.ndim == 2 and b_raw.shape[1] == expected_cols:
+            b_raw = b_raw.reshape(b_raw.shape[0], self.n_sensors, 3)
 
         N = b_raw.shape[0]
         N_sel = len(self.sensor_ids)

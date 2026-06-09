@@ -5,7 +5,7 @@ Affine model calibration for sensor array.
 Per-sensor model:  b_corrected = D_i @ b_raw + e_i
 
 For each CSV file:
-  - Compute b_ref via CenterFieldEstimator (all 12 sensors contribute)
+  - Compute b_ref via CenterFieldEstimator (all sensors in the selected array contribute)
   - b_ref_norm[n] = b_ref[n] * (mean |b_ref| / |b_ref[n]|)  [per-CSV normalization]
   - Fit D_i @ b_raw + e_i = b_ref_norm  per sensor
   - Output: affine_model_params.json with D_i, e_i per sensor
@@ -20,6 +20,7 @@ from pathlib import Path
 import argparse
 
 from calibration import CenterFieldEstimator
+from sensor_array_config import get_array_config
 
 
 def solve_per_sensor(b_corr_all, b_ref_all):
@@ -28,7 +29,7 @@ def solve_per_sensor(b_corr_all, b_ref_all):
     for sid_idx in range(N_sensor):
         b_corr_i = b_corr_all[:, sid_idx, :]
         b_ref_i = b_ref_all
-        A = np.zeros((N_total * 3, 12))
+        A = np.zeros((N_total * 3, 12))  # 9 affine matrix terms + 3 bias terms
         b_vec = np.zeros(N_total * 3)
         for n in range(N_total):
             b_c = b_corr_i[n]
@@ -53,12 +54,13 @@ def solve_per_sensor(b_corr_all, b_ref_all):
 def delta_o_per_row(b_raw_rs, est, D_arr, e_arr, b_ref_eval):
     """Compute Delta_o for each row using D,e for prediction and b_ref_eval for comparison."""
     N = b_raw_rs.shape[0]
+    n_sensors = est.n_sensors
     Delta_o = np.zeros(N)
     for n in range(N):
         filtered = est._filter_to_selected_sensors(b_raw_rs[n])
         b_corr_n = filtered
-        o_n = np.zeros((12, 3))
-        for s in range(12):
+        o_n = np.zeros((n_sensors, 3))
+        for s in range(n_sensors):
             o_n[s] = D_arr[s] @ b_corr_n[s, :] + e_arr[s] - b_ref_eval[n]
         o_bar_n = np.mean(o_n, axis=0)
         Delta_o[n] = np.sqrt(np.mean(np.sum((o_n - o_bar_n) ** 2, axis=1)))
@@ -83,6 +85,11 @@ def build_arg_parser():
         description="Fit per-sensor affine calibration from manual_record_*.csv files.",
     )
     parser.add_argument(
+        "--array-config",
+        default="qmc6309_12ch_v1",
+        help="Array config name under sensor_array_config/config/arrays.",
+    )
+    parser.add_argument(
         "--data-dir",
         type=Path,
         default=Path(__file__).resolve().parents[3] / "data" / "manual_calibration",
@@ -91,15 +98,8 @@ def build_arg_parser():
     parser.add_argument(
         "--output",
         type=Path,
-        default=(
-            Path(__file__).resolve().parents[2]
-            / "sensor_array_config"
-            / "config"
-            / "arrays"
-            / "qmc6309_12ch_v1"
-            / "affine_model_params.json"
-        ),
-        help="Output affine_model_params.json path.",
+        default=None,
+        help="Output affine_model_params.json path. Defaults to the selected array config bundle.",
     )
     return parser
 
@@ -107,7 +107,18 @@ def build_arg_parser():
 def main():
     args = build_arg_parser().parse_args()
     base_dir = args.data_dir
-    est = CenterFieldEstimator()
+    array_config = get_array_config(args.array_config)
+    n_sensors = int(array_config.manifest.n_sensors)
+    est = CenterFieldEstimator(sensor_config=array_config)
+    default_output = (
+        Path(__file__).resolve().parents[2]
+        / "sensor_array_config"
+        / "config"
+        / "arrays"
+        / args.array_config
+        / "affine_model_params.json"
+    )
+    output_path = args.output if args.output is not None else default_output
 
     # ── Collect data per CSV (each CSV normalized independently) ───────────────
     csv_files = sorted(base_dir.glob('manual_record_*.csv'))
@@ -117,8 +128,14 @@ def main():
     for csv_path in csv_files:
         df = pd.read_csv(csv_path)
         b_raw = df.values.astype(np.float64)
+        expected_cols = n_sensors * 3
+        if b_raw.shape[1] != expected_cols:
+            raise ValueError(
+                f"{csv_path} has {b_raw.shape[1]} columns, expected {expected_cols} "
+                f"for array_config={args.array_config}"
+            )
         N = b_raw.shape[0]
-        b_raw_rs = b_raw.reshape(-1, 12, 3)
+        b_raw_rs = b_raw.reshape(-1, n_sensors, 3)
         b_ref, b_corr = est.estimate_batch(b_raw)
         mag = np.linalg.norm(b_ref, axis=1)
         mean_mag = mag.mean()
@@ -142,14 +159,14 @@ def main():
     # ── Fit with NORMALIZED b_ref ─────────────────────────────────────────────
     print("\n=== Fitting affine model with normalized b_ref ===")
     results_norm = solve_per_sensor(all_b_corr, all_b_ref_norm)
-    D_arr_norm = np.array([results_norm[s]['D'] for s in range(1, 13)])
-    e_arr_norm = np.array([results_norm[s]['e'] for s in range(1, 13)]).squeeze()
+    D_arr_norm = np.array([results_norm[s]['D'] for s in range(1, n_sensors + 1)])
+    e_arr_norm = np.array([results_norm[s]['e'] for s in range(1, n_sensors + 1)]).squeeze()
 
     # ── Fit with ORIGINAL b_ref (for comparison baseline) ─────────────────────
     print("=== Fitting with original b_ref ===")
     results_orig = solve_per_sensor(all_b_corr, all_b_ref)
-    D_arr_orig = np.array([results_orig[s]['D'] for s in range(1, 13)])
-    e_arr_orig = np.array([results_orig[s]['e'] for s in range(1, 13)]).squeeze()
+    D_arr_orig = np.array([results_orig[s]['D'] for s in range(1, n_sensors + 1)])
+    e_arr_orig = np.array([results_orig[s]['e'] for s in range(1, n_sensors + 1)]).squeeze()
 
     # ── Per-CSV evaluation ────────────────────────────────────────────────────
     print("\n=== Per-CSV results ===")
@@ -206,7 +223,7 @@ def main():
     print(f"  post (norm train, vs norm b_ref): {df['post_norm_train'].mean():.6f}")
 
     # Save affine calibration JSON
-    cal_out = args.output.expanduser()
+    cal_out = output_path.expanduser()
     cal_out.parent.mkdir(parents=True, exist_ok=True)
     output = {"sensors": []}
     for sid, params in results_norm.items():
