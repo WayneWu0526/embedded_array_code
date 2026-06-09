@@ -20,7 +20,7 @@ from pathlib import Path
 import argparse
 
 from calibration import CenterFieldEstimator
-from sensor_array_config import get_array_config
+from sensor_array_config import get_array_config, list_array_configs
 
 
 def solve_per_sensor(b_corr_all, b_ref_all):
@@ -86,8 +86,8 @@ def build_arg_parser():
     )
     parser.add_argument(
         "--array-config",
-        default="qmc6309_12ch_v1",
-        help="Array config name under sensor_array_config/config/arrays.",
+        default=None,
+        help="Array config name under sensor_array_config/config/arrays. If omitted, prompt interactively.",
     )
     parser.add_argument(
         "--data-dir",
@@ -104,10 +104,35 @@ def build_arg_parser():
     return parser
 
 
+def select_array_config(array_config_arg):
+    if array_config_arg:
+        return array_config_arg
+
+    array_configs = list_array_configs()
+    if not array_configs:
+        raise RuntimeError("No array configs found under sensor_array_config/config/arrays")
+
+    print("\nSelect array config to calibrate:")
+    for idx, name in enumerate(array_configs, start=1):
+        print(f"  {idx}. {name}")
+
+    while True:
+        choice = input(f"Array config [1-{len(array_configs)}]: ").strip()
+        try:
+            idx = int(choice)
+        except ValueError:
+            print("Please enter a number.")
+            continue
+        if 1 <= idx <= len(array_configs):
+            return array_configs[idx - 1]
+        print(f"Please enter a number between 1 and {len(array_configs)}.")
+
+
 def main():
     args = build_arg_parser().parse_args()
     base_dir = args.data_dir
-    array_config = get_array_config(args.array_config)
+    array_config_name = select_array_config(args.array_config)
+    array_config = get_array_config(array_config_name)
     n_sensors = int(array_config.manifest.n_sensors)
     est = CenterFieldEstimator(sensor_config=array_config)
     default_output = (
@@ -115,7 +140,7 @@ def main():
         / "sensor_array_config"
         / "config"
         / "arrays"
-        / args.array_config
+        / array_config_name
         / "affine_model_params.json"
     )
     output_path = args.output if args.output is not None else default_output
@@ -132,7 +157,7 @@ def main():
         if b_raw.shape[1] != expected_cols:
             raise ValueError(
                 f"{csv_path} has {b_raw.shape[1]} columns, expected {expected_cols} "
-                f"for array_config={args.array_config}"
+                f"for array_config={array_config_name}"
             )
         N = b_raw.shape[0]
         b_raw_rs = b_raw.reshape(-1, n_sensors, 3)
