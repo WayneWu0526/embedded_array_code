@@ -2,7 +2,7 @@
 <package format="2">
   <name>sensor_array_config</name>
   <version>0.0.0</version>
-  <description>Sensor array, IMU, and board profile configuration package.</description>
+  <description>Board-level magnetic sensor and IMU hardware configuration package.</description>
 
   <maintainer email="maintainers@example.com">Mi-Gels Maintainers</maintainer>
   <license>MIT</license>

@@ -10,7 +10,7 @@
 | `src/sensor_data_collection/scripts/maggrad_continuous_collection_node.py` | 主线保留 | Mi-Gels 连续采集入口 |
 | `src/sensor_data_collection/launch/maggrad_continuous_collection.launch` | 主线保留 | 推荐 launch |
 | `src/sensor_data_collection/config/*maggrad*` | 主线保留 | 连续采集和 FY8300 时序配置 |
-| `src/sensor_array_config/` | 主线保留 | QMC6309/AK09973D 阵列参数和 affine 标定 |
+| `src/sensor_array_config/` | 主线保留 | QMC6309/AK09973D/TMAG3001 板级 hardware 配置、IMU 位姿和 affine 标定 |
 | `src/calibration/` | 主线保留 | Mi-Gels 标定和中心场估计 |
 | `src/triple_arm_visual_servo/` | 按需保留 | 机械臂/视觉伺服实验仍可能需要 |
 

@@ -1,9 +1,9 @@
 <launch>
   <!-- Arguments -->
-  <arg name="array_config" default="qmc6309_12ch_v1"/>
+  <arg name="hardware_config" default="qmc6309"/>
 
   <!-- Start localization service -->
   <node name="gels_localization_service" pkg="gels_localization" type="localization_service_node.py" output="screen">
-    <param name="array_config" value="$(arg array_config)"/>
+    <param name="hardware_config" value="$(arg hardware_config)"/>
   </node>
 </launch>

@@ -24,7 +24,12 @@ from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Float32MultiArray, Header, String
 
 from serial_processor.msg import MagGradImuRaw, SensorData, StmUplink
-from sensor_array_config import ArrayConfig, get_array_config, get_imu_config, get_profile
+from sensor_array_config import (
+    HardwareConfig,
+    get_hardware_config,
+    get_runtime_config,
+    resolve_runtime_value,
+)
 
 
 class MagGradProtocol:
@@ -121,17 +126,16 @@ class SerialNodeMagGrad:
     def __init__(self):
         rospy.init_node("serial_node_maggrad", anonymous=True)
 
-        self.port = self._resolve_serial_port(rospy.get_param("~port", "auto"))
-        self.baudrate = int(rospy.get_param("~baudrate", 115200))
+        self.runtime_config = get_runtime_config()
+        self.port = self._resolve_serial_port(self._runtime_param("~port", "port", "auto"))
+        self.baudrate = int(self._runtime_param("~baudrate", "baudrate", 115200))
         self.post_open_delay = float(rospy.get_param("~post_open_delay", 2.2))
-        self.profile_name = rospy.get_param("~profile", "maggrad_dual_v1")
-        self.profile = get_profile(self.profile_name)
-        self.array_config_name = rospy.get_param("~array_config", self.profile.default_array_config)
-        self.imu_config_name = rospy.get_param("~imu_config", self.profile.default_imu_config)
-        self.array_config: ArrayConfig = get_array_config(self.array_config_name)
-        self.imu_config = get_imu_config(self.imu_config_name)
-        self.adu_to_gs = float(self.array_config.adu_to_gs)
-        self.n_sensors = int(self.array_config.manifest.n_sensors)
+        self.hardware_config_name = self._runtime_param("~hardware_config", "hardware_config", "qmc6309")
+        self.hardware_config: HardwareConfig = get_hardware_config(self.hardware_config_name)
+        self.magnetometer = self.hardware_config.magnetometer
+        self.imu_config = self.hardware_config.imu
+        self.adu_to_gs = float(self.magnetometer.adu_to_gs)
+        self.n_sensors = int(self.magnetometer.n_sensors)
         default_output_dir = os.path.abspath(os.path.join(
             os.path.dirname(__file__),
             "..",
@@ -147,9 +151,13 @@ class SerialNodeMagGrad:
                 default_output_dir,
             )
         )
-        self.startup_strategy = str(rospy.get_param("~startup_strategy", "cont")).strip().lower()
-        self.startup_sensors = str(rospy.get_param("~startup_sensors", "auto")).strip().upper()
-        self.trigger_rate_hz = int(rospy.get_param("~trigger_rate_hz", 100))
+        self.startup_strategy = str(
+            self._runtime_param("~startup_strategy", "startup_strategy", "cont")
+        ).strip().lower()
+        self.startup_sensors = str(
+            self._runtime_param("~startup_sensors", "startup_sensors", "auto")
+        ).strip().upper()
+        self.trigger_rate_hz = int(self._runtime_param("~trigger_rate_hz", "trigger_rate_hz", 100))
 
         self.publish_scaled_imu = self._param_bool(
             rospy.get_param("~publish_scaled_imu", self.imu_config.publish_scaled_imu)
@@ -180,9 +188,12 @@ class SerialNodeMagGrad:
         self._configure_firmware_stream()
         rospy.loginfo(
             f"SerialNodeMagGrad initialized: port={self.port}, baudrate={self.baudrate}, "
-            f"profile={self.profile_name}, array_config={self.array_config_name}, "
-            f"imu_config={self.imu_config_name}, adu_to_gs={self.adu_to_gs:.8f}"
+            f"hardware_config={self.hardware_config_name}, adu_to_gs={self.adu_to_gs:.8f}"
         )
+
+    def _runtime_param(self, ros_param, runtime_key, fallback):
+        value = rospy.get_param(ros_param, "runtime")
+        return resolve_runtime_value(value, runtime_key, fallback)
 
     def _resolve_serial_port(self, configured_port):
         port = str(configured_port).strip()
@@ -214,7 +225,7 @@ class SerialNodeMagGrad:
 
     def _load_r_corr(self):
         r_corr = {}
-        for entry in self.array_config.hardware.R_CORR:
+        for entry in self.magnetometer.R_CORR:
             mat = np.array(entry.matrix).reshape(3, 3, order="F")
             for sid in entry.sensor_ids:
                 r_corr[int(sid)] = mat
@@ -224,7 +235,7 @@ class SerialNodeMagGrad:
     def _load_affine(self):
         d_matrix = {}
         e_bias = {}
-        for sid, params in self.array_config.affine_model.params.items():
+        for sid, params in self.magnetometer.affine_model.params.items():
             d_matrix[int(sid)] = np.array(params.D_i)
             e_bias[int(sid)] = np.array(params.e_i).squeeze()
         rospy.loginfo(f"Loaded affine calibration for {len(d_matrix)} sensors")
@@ -254,13 +265,7 @@ class SerialNodeMagGrad:
     def _startup_sensor_arg(self):
         requested = self.startup_sensors
         if requested in ("", "AUTO"):
-            try:
-                return self.profile.startup_sensors[self.array_config_name]
-            except KeyError as exc:
-                raise ValueError(
-                    f"profile {self.profile_name!r} does not define startup_sensors "
-                    f"for array_config {self.array_config_name!r}"
-                ) from exc
+            return "ALL"
         return requested
 
     def _configure_firmware_stream(self):
@@ -442,7 +447,7 @@ class SerialNodeMagGrad:
             ))
 
         self._publish_magnetometer_array(
-            seq, tick_ms, bitmap, chip_sensors, self.array_config.manifest.frame_id
+            seq, tick_ms, bitmap, chip_sensors, self.magnetometer.frame_id
         )
 
     def _publish_qmc_array(self, seq, tick_ms, payload):
@@ -473,7 +478,7 @@ class SerialNodeMagGrad:
             ))
 
         self._publish_magnetometer_array(
-            seq, tick_ms, bitmap, chip_sensors, self.array_config.manifest.frame_id
+            seq, tick_ms, bitmap, chip_sensors, self.magnetometer.frame_id
         )
 
     def _publish_tmag_array(self, seq, tick_ms, payload):
@@ -507,7 +512,7 @@ class SerialNodeMagGrad:
             ))
 
         self._publish_magnetometer_array(
-            seq, tick_ms, bitmap, chip_sensors, self.array_config.manifest.frame_id
+            seq, tick_ms, bitmap, chip_sensors, self.magnetometer.frame_id
         )
 
     def _publish_imu(self, seq, tick_ms, payload):

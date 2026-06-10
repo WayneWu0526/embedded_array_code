@@ -20,7 +20,7 @@ STM32 raw ADU
 
 ```bash
 roslaunch sensor_data_collection stm32_manual.launch \
-  array_config:=qmc6309_12ch_v1
+  hardware_config:=tmag3001
 ```
 
 Start and stop recording:
@@ -42,41 +42,43 @@ data/manual_calibration/
 rosrun calibration calibration_affine_model.py
 ```
 
-If `--array-config` is omitted, the script lists available array configs and
+If `--hardware-config` is omitted, the script lists available hardware configs and
 prompts for a selection.
 
 For non-interactive runs:
 
 ```bash
 rosrun calibration calibration_affine_model.py \
-  --array-config ak09973d_12ch_v1 \
+  --hardware-config ak09973d \
   --data-dir $(pwd)/data/manual_calibration
 ```
 
 3. Output:
 
 ```text
-src/sensor_array_config/config/arrays/<array_config>/affine_model_params.json
+src/sensor_array_config/config/<hardware_config>/affine.json
 ```
 
-The output schema is:
+The updated file contains:
 
-```json
-{
-  "sensors": [
-    {
-      "sensor_id": 1,
-      "D_i": [[...], [...], [...]],
-      "e_i": [...]
-    }
-  ]
-}
+```yaml
+sensors:
+  -
+    sensor_id: 1
+    D_i:
+      - [...]
+      - [...]
+      - [...]
+    e_i:
+      - ...
+      - ...
+      - ...
 ```
 
 ## Boundary
 
-- `calibration` computes and writes `affine_model_params.json`.
-- `sensor_array_config` stores array geometry, R_CORR, and affine parameters.
+- `calibration` computes and writes `config/<hardware_config>/affine.json`.
+- `sensor_array_config` stores board-level magnetometer, array, IMU pose, R_CORR, and affine parameters.
 - `serial_processor` loads those parameters and publishes calibrated
   `stm_uplink`.
 - `sensor_data_collection` records input CSVs and runtime experiment data.

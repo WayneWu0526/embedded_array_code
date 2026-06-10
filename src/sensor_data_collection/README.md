@@ -19,7 +19,7 @@ ROS package for Mi-Gels magnetic sensor data collection.
 New experiment output should not be written under this package. Prefer the
 workspace-level `data/` directory, NAS, or another external archive.
 
-Array, IMU, and board-profile configuration lives in
+Board-level magnetic sensor and IMU hardware configuration lives in
 `src/sensor_array_config/config/`.
 
 ## Legacy GELS/TDM Reference

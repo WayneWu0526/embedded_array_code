@@ -8,7 +8,7 @@
 | --- | --- |
 | `serial_processor` | STM32 二进制流解析；`serial_node_maggrad.py` 发布磁传感器、IMU、原始/标定后 topic |
 | `sensor_data_collection` | 连续采集；`maggrad_continuous_collection_node.py` 将磁场、IMU、线圈状态、TF 同步写入 CSV/JSONL |
-| `sensor_array_config` | 传感器阵列、IMU 和 profile 配置；当前包含 QMC6309、AK09973D、TMAG3001 阵列 |
+| `sensor_array_config` | 板级 hardware config；当前包含 QMC6309、AK09973D、TMAG3001 三种磁传感器板 |
 | `calibration` | Mi-Gels 相关标定与中心场估计脚本 |
 | `triple_arm_visual_servo` | 需要机械臂轨迹/视觉伺服时使用 |
 | `gels_localization` | 旧 GELS 定位服务和离线算法参考，非默认在线入口 |
@@ -39,9 +39,7 @@ roslaunch sensor_data_collection maggrad_continuous_collection.launch
 
 ```bash
 roslaunch sensor_data_collection maggrad_continuous_collection.launch \
-  profile:=maggrad_dual_v1 \
-  array_config:=qmc6309_12ch_v1 \
-  imu_config:=icm42670 \
+  hardware_config:=tmag3001 \
   port:=auto \
   baudrate:=115200 \
   output_dir:=$(pwd)/data \
@@ -119,7 +117,7 @@ Mi-Gels 当前使用 FY8300 三通道连续输出，采集节点只按时间给�
 ## 5. 建议的实验数据流程
 
 1. 采集前确认 `zlab_robots_calibration` 能发布 `lab_table` 和需要的 `_filt` TF。
-2. 启动 `maggrad_continuous_collection.launch`，确认 `serial_node_maggrad` 已识别正确 `profile`、`array_config` 和 `imu_config`。
+2. 启动 `maggrad_continuous_collection.launch`，确认 `serial_node_maggrad` 已识别正确 `hardware_config`。
 3. 先短录 5-10 s，检查 CSV 中 `coil_state` 是否周期正确，TF 列是否非空。
 4. 正式录制时保持 `output_dir` 指向工作区根目录 `data/`，大型归档再手动转移到 NAS 或外部数据仓库。
 5. 分析时保留原始 CSV，只把分析脚本、配置和小型摘要报告提交到 Git。

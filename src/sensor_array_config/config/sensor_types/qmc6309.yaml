@@ -1,8 +1,0 @@
-{
-  "name": "QMC6309",
-  "manufacturer": "QST",
-  "bit_width": 16,
-  "range_gs": 32.0,
-  "adu_to_gs": 0.0009765625,
-  "gs_to_tesla": 0.0001
-}

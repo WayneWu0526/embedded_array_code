@@ -21,7 +21,7 @@ import numpy as np
 from std_msgs.msg import Header, Float32MultiArray, Bool, String
 from datetime import datetime
 from serial_processor.msg import SensorData, StmUplink, StmDownlink
-from sensor_array_config import ArrayConfig, get_array_config
+from sensor_array_config import HardwareConfig, get_hardware_config
 
 
 class ManualRecorder:
@@ -143,14 +143,15 @@ class SerialNodeTDM:
         self.port = self._resolve_serial_port(rospy.get_param('~port', '/dev/ttyACM'))
         self.baudrate = rospy.get_param('~baudrate', 921600)
 
-        # Load sensor array configuration
-        self._array_config_name = rospy.get_param('~array_config', 'qmc6309_12ch_v1')
-        self._sensor_config: ArrayConfig = get_array_config(self._array_config_name)
-        self._adu_to_gs = self._sensor_config.adu_to_gs
-        self._frame_id = self._sensor_config.manifest.frame_id
+        # Load hardware configuration
+        self._hardware_config_name = rospy.get_param('~hardware_config', 'qmc6309')
+        self._hardware_config: HardwareConfig = get_hardware_config(self._hardware_config_name)
+        self._magnetometer = self._hardware_config.magnetometer
+        self._adu_to_gs = self._magnetometer.adu_to_gs
+        self._frame_id = self._magnetometer.frame_id
         rospy.loginfo(
-            f"Using array_config: {self._array_config_name}, "
-            f"n_sensors={self._sensor_config.manifest.n_sensors}"
+            f"Using hardware_config: {self._hardware_config_name}, "
+            f"n_sensors={self._magnetometer.n_sensors}"
         )
 
         # Manual record parameters
@@ -187,7 +188,7 @@ class SerialNodeTDM:
         # Load R_CORR orientation alignment matrices
         self._load_sensor_array_params()
         # Load affine model calibration D_i, e_i from sensor config
-        affine = self._sensor_config.affine_model
+        affine = self._magnetometer.affine_model
         self.D_matrix = {}
         self.e_bias = {}
         for sid, params in affine.params.items():
@@ -199,7 +200,7 @@ class SerialNodeTDM:
         self.recorder = ManualRecorder(
             self.output_dir,
             self.frames_to_average,
-            n_sensors=self._sensor_config.manifest.n_sensors,
+            n_sensors=self._magnetometer.n_sensors,
         )
         # Subscribe to own stm_uplink_raw for recording (self-subscribe)
         self.sub_record = rospy.Subscriber('stm_uplink_raw', StmUplink, self._on_uplink_raw_record)
@@ -213,7 +214,7 @@ class SerialNodeTDM:
 
         rospy.loginfo(
             f"SerialNodeTDM initialized: {self.port} at {self.baudrate} baud, "
-            f"array_config={self._array_config_name}"
+            f"hardware_config={self._hardware_config_name}"
         )
 
         # Register shutdown handler
@@ -244,13 +245,12 @@ class SerialNodeTDM:
         return port
 
     def _load_sensor_array_params(self):
-        """Load d_list and R_CORR orientation alignment from ArrayConfig."""
-        hw = self._sensor_config.hardware
+        """Load d_list and R_CORR orientation alignment from HardwareConfig."""
+        hw = self._magnetometer
         self._d_list = np.array(hw.d_list)
-        manifest = self._sensor_config.manifest
-        self._n_sensors = manifest.n_sensors
-        self._n_groups = manifest.n_groups
-        self._sensors_per_group = manifest.sensors_per_group
+        self._n_sensors = hw.n_sensors
+        self._n_groups = hw.n_groups
+        self._sensors_per_group = hw.sensors_per_group
         self.R_CORR = {}
         for entry in hw.R_CORR:
             mat = np.array(entry.matrix).reshape(3, 3, order='F')

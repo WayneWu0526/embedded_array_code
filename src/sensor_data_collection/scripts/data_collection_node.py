@@ -24,7 +24,7 @@ from serial_processor.srv import GetHallData, GetHallDataResponse
 from std_msgs.msg import Bool, Float64, Empty
 from sensor_data_collection.msg import SlotData, SensorReading
 from sensor_data_collection.srv import LocalizeCycle, LocalizeCycleRequest
-from sensor_array_config import ArrayConfig, get_array_config
+from sensor_array_config import HardwareConfig, get_hardware_config
 
 
 # Mode constants
@@ -132,12 +132,13 @@ class DataCollector:
         # Check if running in manual trigger mode
         self.manual_trigger = rospy.get_param('~manual_trigger', False)
 
-        # Load sensor array configuration
-        self._array_config_name = rospy.get_param('~array_config', 'qmc6309_12ch_v1')
-        self._sensor_config: ArrayConfig = get_array_config(self._array_config_name)
+        # Load hardware configuration
+        self._hardware_config_name = rospy.get_param('~hardware_config', 'qmc6309')
+        self._hardware_config: HardwareConfig = get_hardware_config(self._hardware_config_name)
+        self._magnetometer = self._hardware_config.magnetometer
         rospy.loginfo(
-            f"Using array_config: {self._array_config_name}, "
-            f"n_sensors={self._sensor_config.manifest.n_sensors}"
+            f"Using hardware_config: {self._hardware_config_name}, "
+            f"n_sensors={self._magnetometer.n_sensors}"
         )
 
         # Parameters
@@ -166,7 +167,7 @@ class DataCollector:
             self.mode = MODE_CCI
         else:
             self.mode = MODE_CVT
-        all_sensors_bitmap = (1 << self._sensor_config.manifest.n_sensors) - 1
+        all_sensors_bitmap = (1 << self._magnetometer.n_sensors) - 1
         self.bitmap = int(rospy.get_param('~bitmap', all_sensors_bitmap))
         self.settling_time = int(rospy.get_param('~settling_time', 10000))  # 0.01ms units
         self.sampling_time = int(rospy.get_param('~sampling_time', 1400))  # 0.01ms units
@@ -565,7 +566,7 @@ class DataCollector:
                 'cycle_id': self.cycle_id,
                 'mode': mode_str,
                 'num_slots': self.num_positions,
-                'sensor_ids': list(range(1, self._sensor_config.manifest.n_sensors + 1)),  # All sensors
+                'sensor_ids': list(range(1, self._magnetometer.n_sensors + 1)),  # All sensors
                 'num_frames_averaged': self.num_frames_to_average
             },
             'pc_timestamp': rospy.Time.now().to_sec(),
@@ -679,7 +680,7 @@ class DataCollector:
             self.current_cycle = CycleBuffer(
                 cycle_id, self.mode, self.bitmap,
                 num_slots=_MODE_SLOT_COUNT[self.mode],
-                n_sensors=self._sensor_config.manifest.n_sensors
+                n_sensors=self._magnetometer.n_sensors
             )
 
         # Create slot buffer

@@ -17,9 +17,7 @@ catkin build
 source devel/setup.bash
 
 roslaunch sensor_data_collection maggrad_continuous_collection.launch \
-  profile:=maggrad_dual_v1 \
-  array_config:=qmc6309_12ch_v1 \
-  imu_config:=icm42670 \
+  hardware_config:=tmag3001 \
   output_dir:=$(pwd)/data
 ```
 
@@ -36,7 +34,7 @@ rostopic pub /maggrad_continuous_collection/record_trigger std_msgs/Bool "data: 
 | --- | --- |
 | `src/sensor_data_collection/` | Main collection package: MagGrad collection, legacy TDM collection, launch/config files |
 | `src/serial_processor/` | STM32 serial bridge and sensor stream publishing |
-| `src/sensor_array_config/` | Sensor-array definitions and calibration parameters |
+| `src/sensor_array_config/` | Board-level magnetic sensor and IMU hardware configs |
 | `src/calibration/` | Calibration and center-field estimation utilities |
 | `src/triple_arm_task/` | Triple-arm scan/exploration experiments |
 | `src/triple_arm_visual_servo/` | MoveIt/visual-servo experiments |

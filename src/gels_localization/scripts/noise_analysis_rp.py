@@ -281,9 +281,9 @@ def run_multi_magnitude_analysis(json_path, magnitudes, num_samples=100, radius=
         output_path: path to save CSV file. If None, saves to
             <json_dir>/noise_analysis_order3.csv
     """
-    from sensor_array_config import get_array_config
-    config = get_array_config('qmc6309_12ch_v1')
-    D_LIST_RAW = np.array(config.hardware.d_list)
+    from sensor_array_config import get_hardware_config
+    config = get_hardware_config('qmc6309')
+    D_LIST_RAW = np.array(config.magnetometer.d_list)
     GS_TO_TESLA_VAL = config.gs_to_si
 
     import localization_service_node as lsn

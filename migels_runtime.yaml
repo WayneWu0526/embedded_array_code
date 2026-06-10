@@ -1,0 +1,6 @@
+hardware_config: ak09973d
+startup_strategy: trig_auto
+startup_sensors: AK_ICM
+trigger_rate_hz: 200
+port: auto
+baudrate: 115200

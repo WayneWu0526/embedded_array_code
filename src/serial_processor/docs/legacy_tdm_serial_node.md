@@ -39,14 +39,14 @@ stm_uplink 发布
 
 | 参数 | 来源 | 用途 |
 |------|------|------|
-| `adu_to_gs` | sensor manifest | STM32 ADU/bit 到 Gs 的单位换算 |
-| `R_CORR` | `sensor_array_params.json` | 传感器安装方位统一，属于 raw 数据构造步骤 |
-| `D_i`, `e_i` | `affine_model_params.json` | affine calibration |
+| `adu_to_gs` | `config/<name>/magnetometer.json` | STM32 ADU/bit 到 Gs 的单位换算 |
+| `R_CORR` | `config/<name>/array.json` | 传感器安装方位统一，属于 raw 数据构造步骤 |
+| `D_i`, `e_i` | `config/<name>/affine.json` | affine calibration |
 
 ## 启动
 
 ```bash
-rosrun serial_processor serial_node_tdm.py _port:=/dev/ttyACM0 _array_config:=qmc6309_12ch_v1
+rosrun serial_processor serial_node_tdm.py _port:=/dev/ttyACM0 _hardware_config:=qmc6309
 ```
 
 ## 二进制协议

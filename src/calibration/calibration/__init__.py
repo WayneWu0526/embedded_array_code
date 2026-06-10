@@ -10,6 +10,7 @@ from .affine_model import (
     result_arrays,
     solve_per_sensor,
     stack_record_sets,
+    update_hardware_affine_model,
     write_affine_model_params,
 )
 from .center_field_estimator import CenterFieldEstimator
@@ -25,5 +26,6 @@ __all__ = [
     'result_arrays',
     'solve_per_sensor',
     'stack_record_sets',
+    'update_hardware_affine_model',
     'write_affine_model_params',
 ]

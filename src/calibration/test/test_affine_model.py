@@ -16,23 +16,29 @@ from calibration import (
     solve_per_sensor,
     write_affine_model_params,
 )
-from sensor_array_config import get_array_config
+from sensor_array_config import get_hardware_config
 
 
 class AffineModelTest(unittest.TestCase):
-    def test_center_field_estimator_loads_all_array_configs(self):
-        for name in ("qmc6309_12ch_v1", "ak09973d_12ch_v1", "tmag3001_12ch_v1"):
-            estimator = CenterFieldEstimator(sensor_config=get_array_config(name))
+    def test_all_hardware_configs_load(self):
+        for name in ("qmc6309", "ak09973d", "tmag3001"):
+            config = get_hardware_config(name)
+            self.assertEqual(config.magnetometer.n_sensors, 12)
+            self.assertEqual(len(config.magnetometer.d_list), 12)
+
+    def test_center_field_estimator_loads_supported_hardware_configs(self):
+        for name in ("qmc6309", "tmag3001"):
+            estimator = CenterFieldEstimator(sensor_config=get_hardware_config(name))
             self.assertEqual(estimator.n_sensors, 12)
             self.assertEqual(estimator.w.shape, (12, 1))
 
     def test_manual_record_column_mismatch_fails(self):
-        estimator = CenterFieldEstimator(sensor_config=get_array_config("qmc6309_12ch_v1"))
+        estimator = CenterFieldEstimator(sensor_config=get_hardware_config("qmc6309"))
         with tempfile.TemporaryDirectory() as tmpdir:
             csv_path = Path(tmpdir) / "manual_record_bad.csv"
             pd.DataFrame([[1.0, 2.0]]).to_csv(csv_path, index=False)
             with self.assertRaisesRegex(ValueError, "expected 36"):
-                load_manual_record_sets(Path(tmpdir), estimator, "qmc6309_12ch_v1")
+                load_manual_record_sets(Path(tmpdir), estimator, "qmc6309")
 
     def test_affine_payload_schema(self):
         results = {
@@ -71,14 +77,14 @@ class AffineModelTest(unittest.TestCase):
             self.assertEqual(np.array(params["D"]).shape, (3, 3))
             self.assertEqual(np.array(params["e"]).reshape(-1).shape, (3,))
 
-    def test_cli_array_config_argument_does_not_prompt(self):
+    def test_cli_hardware_config_argument_does_not_prompt(self):
         script_path = Path(__file__).resolve().parents[1] / "scripts" / "calibration_affine_model.py"
         spec = importlib.util.spec_from_file_location("calibration_affine_model", script_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self.assertEqual(
-            module.select_array_config("ak09973d_12ch_v1"),
-            "ak09973d_12ch_v1",
+            module.select_hardware_config("ak09973d"),
+            "ak09973d",
         )
 
 

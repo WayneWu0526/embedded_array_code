@@ -1,21 +1,17 @@
 <launch>
-  <arg name="port" default="auto"/>
-  <arg name="baudrate" default="115200"/>
-  <arg name="profile" default="maggrad_dual_v1"/>
-  <arg name="array_config" default="qmc6309_12ch_v1"/>
-  <arg name="imu_config" default="icm42670"/>
+  <arg name="port" default="runtime"/>
+  <arg name="baudrate" default="runtime"/>
+  <arg name="hardware_config" default="runtime"/>
   <arg name="output_dir" default="$(find sensor_data_collection)/../../data"/>
   <arg name="publish_scaled_imu" default="true"/>
-  <arg name="startup_strategy" default="cont"/>
-  <arg name="startup_sensors" default="auto"/>
-  <arg name="trigger_rate_hz" default="100"/>
+  <arg name="startup_strategy" default="runtime"/>
+  <arg name="startup_sensors" default="runtime"/>
+  <arg name="trigger_rate_hz" default="runtime"/>
 
   <node name="serial_node_maggrad" pkg="serial_processor" type="serial_node_maggrad.py" output="screen">
     <param name="port" value="$(arg port)"/>
     <param name="baudrate" value="$(arg baudrate)"/>
-    <param name="profile" value="$(arg profile)"/>
-    <param name="array_config" value="$(arg array_config)"/>
-    <param name="imu_config" value="$(arg imu_config)"/>
+    <param name="hardware_config" value="$(arg hardware_config)"/>
     <param name="output_dir" value="$(arg output_dir)"/>
     <param name="publish_scaled_imu" value="$(arg publish_scaled_imu)"/>
     <param name="startup_strategy" value="$(arg startup_strategy)"/>

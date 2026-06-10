@@ -1,0 +1,12 @@
+{
+  "name": "tmag3001",
+  "firmware_protocol": "maggrad_binary_v1",
+  "calibration_status": "placeholder",
+  "notes": "Placeholder geometry and identity R_CORR until measured PCB coordinates are available.",
+  "files": {
+    "magnetometer": "magnetometer.json",
+    "array": "array.json",
+    "affine": "affine.json",
+    "imu": "imu.json"
+  }
+}

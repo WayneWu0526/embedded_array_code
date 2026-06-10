@@ -10,6 +10,7 @@ from datetime import datetime
 import rospy
 from sensor_msgs.msg import Imu
 from serial_processor.msg import MagGradImuRaw, StmUplink
+from sensor_array_config import get_hardware_config, resolve_runtime_value
 from std_msgs.msg import Bool, String
 from tf2_ros import Buffer, TransformListener
 
@@ -172,7 +173,16 @@ class MagGradContinuousCollectionNode:
     def __init__(self):
         rospy.init_node("maggrad_continuous_collection_node", anonymous=True)
 
-        self.n_sensors = int(rospy.get_param("~n_sensors", 12))
+        self.hardware_config_name = resolve_runtime_value(
+            rospy.get_param("~hardware_config", "runtime"),
+            "hardware_config",
+            "qmc6309",
+        )
+        n_sensors_param = rospy.get_param("~n_sensors", "runtime")
+        if resolve_runtime_value(n_sensors_param, "n_sensors", "runtime") == "runtime":
+            self.n_sensors = int(get_hardware_config(self.hardware_config_name).magnetometer.n_sensors)
+        else:
+            self.n_sensors = int(resolve_runtime_value(n_sensors_param, "n_sensors", 12))
         default_output_dir = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "..", "..", "..", "data")
         )

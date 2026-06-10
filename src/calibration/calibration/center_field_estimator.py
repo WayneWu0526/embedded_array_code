@@ -1,6 +1,6 @@
 import numpy as np
 
-from sensor_array_config import get_array_config
+from sensor_array_config import HardwareConfig, get_hardware_config
 
 
 def null(A: np.ndarray, rcond: float = 1e-10) -> np.ndarray:
@@ -20,10 +20,11 @@ class CenterFieldEstimator:
 
     def __init__(self, sensor_config=None, sensor_ids=None):
         if sensor_config is None:
-            sensor_config = get_array_config("qmc6309_12ch_v1")
+            sensor_config = get_hardware_config("qmc6309")
         self.sensor_config = sensor_config
-        self.full_d_list = np.array(sensor_config.hardware.d_list)
-        self.n_sensors = int(sensor_config.manifest.n_sensors)
+        self.magnetometer = sensor_config.magnetometer if isinstance(sensor_config, HardwareConfig) else sensor_config
+        self.full_d_list = np.array(self.magnetometer.d_list)
+        self.n_sensors = int(self.magnetometer.n_sensors)
 
         # Default: all sensors in the selected array.
         if sensor_ids is None:

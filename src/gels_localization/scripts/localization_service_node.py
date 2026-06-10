@@ -29,7 +29,7 @@ if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 
 from maps_estimator import MaPS_Estimator
-from sensor_array_config import ArrayConfig, get_array_config
+from sensor_array_config import HardwareConfig, get_hardware_config
 
 # ROS imports - optional for standalone testing
 try:
@@ -43,17 +43,17 @@ except ImportError:
     LocalizeCycleResponse = None
 
 
-# Load array config from rosparam (if ROS is available, otherwise default)
-_ARRAY_CONFIG_NAME = 'qmc6309_12ch_v1'
-_ARRAY_CONFIG: ArrayConfig = None
+# Load hardware config from rosparam (if ROS is available, otherwise default)
+_HARDWARE_CONFIG_NAME = 'qmc6309'
+_HARDWARE_CONFIG: HardwareConfig = None
 
-def _get_array_config():
-    global _ARRAY_CONFIG, _ARRAY_CONFIG_NAME
-    if _ARRAY_CONFIG is None:
+def _get_hardware_config():
+    global _HARDWARE_CONFIG, _HARDWARE_CONFIG_NAME
+    if _HARDWARE_CONFIG is None:
         if ROS_AVAILABLE:
-            _ARRAY_CONFIG_NAME = rospy.get_param('~array_config', 'qmc6309_12ch_v1')
-        _ARRAY_CONFIG = get_array_config(_ARRAY_CONFIG_NAME)
-    return _ARRAY_CONFIG
+            _HARDWARE_CONFIG_NAME = rospy.get_param('~hardware_config', 'qmc6309')
+        _HARDWARE_CONFIG = get_hardware_config(_HARDWARE_CONFIG_NAME)
+    return _HARDWARE_CONFIG
 
 
 # =============================================================================
@@ -72,16 +72,16 @@ def load_configuration():
     """Load sensor calibration parameters from sensor_array_config."""
     global D_LIST, GS_TO_TESLA
 
-    config = _get_array_config()
+    config = _get_hardware_config()
 
     # D_LIST from hardware params (n_sensors x 3), indexed as D_LIST[sensor_idx, :]
-    hw = config.hardware
-    D_LIST = np.array(hw.d_list)  # Shape (n_sensors, 3)
+    magnetometer = config.magnetometer
+    D_LIST = np.array(magnetometer.d_list)  # Shape (n_sensors, 3)
 
     # GS_TO_TESLA from config
     GS_TO_TESLA = config.gs_to_si
 
-    print(f"[INFO] Configuration loaded for array_config: {_ARRAY_CONFIG_NAME}")
+    print(f"[INFO] Configuration loaded for hardware_config: {_HARDWARE_CONFIG_NAME}")
     print(f"[INFO] D_LIST shape: {D_LIST.shape}, GS_TO_TESLA: {GS_TO_TESLA}")
 
 def quaternion_z_axis(q):
@@ -424,10 +424,10 @@ def main():
     rospy.loginfo("GELS Localization service started (FRAMEWORK MODE)")
 
     # Initialize sensor config from rosparam
-    global _ARRAY_CONFIG_NAME, _ARRAY_CONFIG
-    _ARRAY_CONFIG_NAME = rospy.get_param('~array_config', 'qmc6309_12ch_v1')
-    _ARRAY_CONFIG = get_array_config(_ARRAY_CONFIG_NAME)
-    rospy.loginfo(f"Using array_config: {_ARRAY_CONFIG_NAME}")
+    global _HARDWARE_CONFIG_NAME, _HARDWARE_CONFIG
+    _HARDWARE_CONFIG_NAME = rospy.get_param('~hardware_config', 'qmc6309')
+    _HARDWARE_CONFIG = get_hardware_config(_HARDWARE_CONFIG_NAME)
+    rospy.loginfo(f"Using hardware_config: {_HARDWARE_CONFIG_NAME}")
 
     # Load configuration
     load_configuration()

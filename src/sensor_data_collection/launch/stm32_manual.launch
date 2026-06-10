@@ -14,7 +14,7 @@
     参数:
     - output_dir: CSV 输出目录
     - frames_to_average: 每行平均的帧数（默认 10）
-    - startup_strategy: 新固件启动模式，默认 cont，会发送 MODE CONT
+    - startup_strategy: 新固件启动模式，默认 runtime，读取工作区根目录 migels_runtime.yaml
 
     使用示例:
       # 开始录制
@@ -24,26 +24,22 @@
   -->
 
   <!-- Arguments -->
-  <arg name="port" default="auto"/>
-  <arg name="baudrate" default="115200"/>
-  <arg name="profile" default="maggrad_dual_v1"/>
-  <arg name="array_config" default="qmc6309_12ch_v1"/>
-  <arg name="imu_config" default="icm42670"/>
-  <arg name="n_sensors" default="12"/>
+  <arg name="port" default="runtime"/>
+  <arg name="baudrate" default="runtime"/>
+  <arg name="hardware_config" default="runtime"/>
+  <arg name="n_sensors" default="runtime"/>
   <arg name="output_dir" default="$(find sensor_data_collection)/../../data/manual_calibration"/>
   <arg name="frames_to_average" default="10"/>
-  <arg name="startup_strategy" default="cont"/>
-  <arg name="startup_sensors" default="auto"/>
-  <arg name="trigger_rate_hz" default="100"/>
+  <arg name="startup_strategy" default="runtime"/>
+  <arg name="startup_sensors" default="runtime"/>
+  <arg name="trigger_rate_hz" default="runtime"/>
   <arg name="input_topic" default="stm_uplink_raw"/>
 
   <!-- STM32 MagGrad firmware serial node -->
   <node name="serial_node_maggrad" pkg="serial_processor" type="serial_node_maggrad.py" output="screen">
     <param name="port" value="$(arg port)"/>
     <param name="baudrate" value="$(arg baudrate)"/>
-    <param name="profile" value="$(arg profile)"/>
-    <param name="array_config" value="$(arg array_config)"/>
-    <param name="imu_config" value="$(arg imu_config)"/>
+    <param name="hardware_config" value="$(arg hardware_config)"/>
     <param name="output_dir" value="$(arg output_dir)"/>
     <param name="startup_strategy" value="$(arg startup_strategy)"/>
     <param name="startup_sensors" value="$(arg startup_sensors)"/>
@@ -55,6 +51,7 @@
   <node name="maggrad_manual_record" pkg="sensor_data_collection"
         type="maggrad_manual_record_node.py" output="screen">
     <param name="output_dir" value="$(arg output_dir)"/>
+    <param name="hardware_config" value="$(arg hardware_config)"/>
     <param name="frames_to_average" value="$(arg frames_to_average)"/>
     <param name="n_sensors" value="$(arg n_sensors)"/>
     <param name="input_topic" value="$(arg input_topic)"/>

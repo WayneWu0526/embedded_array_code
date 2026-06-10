@@ -18,15 +18,14 @@
       $(arg output_dir)/maggrad_continuous_*.csv
   -->
 
-  <arg name="port" default="auto"/>
-  <arg name="baudrate" default="115200"/>
-  <arg name="profile" default="maggrad_dual_v1"/>
-  <arg name="array_config" default="qmc6309_12ch_v1"/>
-  <arg name="imu_config" default="icm42670"/>
+  <arg name="port" default="runtime"/>
+  <arg name="baudrate" default="runtime"/>
+  <arg name="hardware_config" default="runtime"/>
   <arg name="output_dir" default="$(find sensor_data_collection)/../../data"/>
-  <arg name="startup_strategy" default="cont"/>
-  <arg name="startup_sensors" default="auto"/>
-  <arg name="trigger_rate_hz" default="100"/>
+  <arg name="startup_strategy" default="runtime"/>
+  <arg name="startup_sensors" default="runtime"/>
+  <arg name="trigger_rate_hz" default="runtime"/>
+  <arg name="n_sensors" default="runtime"/>
   <arg name="collection_config" default="$(find sensor_data_collection)/config/maggrad_continuous_collection.yaml"/>
   <arg name="signal_config" default="$(find sensor_data_collection)/config/signal_params_maggrad_continuous.yaml"/>
   <arg name="record_tf" default="true"/>
@@ -45,9 +44,7 @@
   <node name="serial_node_maggrad" pkg="serial_processor" type="serial_node_maggrad.py" output="screen">
     <param name="port" value="$(arg port)"/>
     <param name="baudrate" value="$(arg baudrate)"/>
-    <param name="profile" value="$(arg profile)"/>
-    <param name="array_config" value="$(arg array_config)"/>
-    <param name="imu_config" value="$(arg imu_config)"/>
+    <param name="hardware_config" value="$(arg hardware_config)"/>
     <param name="output_dir" value="$(arg output_dir)"/>
     <param name="startup_strategy" value="$(arg startup_strategy)"/>
     <param name="startup_sensors" value="$(arg startup_sensors)"/>
@@ -58,6 +55,8 @@
         type="maggrad_continuous_collection_node.py" output="screen">
     <rosparam file="$(arg collection_config)" command="load"/>
     <param name="output_dir" value="$(arg output_dir)"/>
+    <param name="hardware_config" value="$(arg hardware_config)"/>
+    <param name="n_sensors" value="$(arg n_sensors)"/>
     <param name="record_tf" value="$(arg record_tf)"/>
     <param name="tf_reference_frame" value="$(arg tf_reference_frame)"/>
   </node>

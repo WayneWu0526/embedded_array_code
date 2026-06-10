@@ -17,11 +17,20 @@ even when other workspaces also contain a sensor_data_collection package.
 Environment:
   ROS_DISTRO       ROS distribution name. Default: noetic
   ZLAB_ROBOTS_WS   Dependency workspace. Default: \$HOME/zlab_robots
+  MIGELS_RUNTIME_CONFIG
+                   Runtime config path. Default: ${WS_ROOT}/migels_runtime.yaml
 
 Examples:
   tools/run_stm32_manual_migels.sh
-  tools/run_stm32_manual_migels.sh array_config:=qmc6309_12ch_v1 output_dir:="${WS_ROOT}/data/manual_calibration"
+  tools/run_stm32_manual_migels.sh hardware_config:=ak09973d startup_sensors:=AK_ICM
 EOF
+}
+
+source_setup() {
+  set +u
+  # shellcheck source=/dev/null
+  source "$1"
+  set -u
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -39,12 +48,12 @@ if [[ ! -f "${ROS_SETUP}" ]]; then
   echo "ERROR: ROS setup not found: ${ROS_SETUP}" >&2
   exit 1
 fi
-source "${ROS_SETUP}"
+source_setup "${ROS_SETUP}"
 
 # Source dependency workspace first, then this Mi-Gels workspace.
 ZLAB_ROBOTS_WS="${ZLAB_ROBOTS_WS:-${HOME}/zlab_robots}"
 if [[ -f "${ZLAB_ROBOTS_WS}/devel/setup.bash" ]]; then
-  source "${ZLAB_ROBOTS_WS}/devel/setup.bash"
+  source_setup "${ZLAB_ROBOTS_WS}/devel/setup.bash"
 else
   echo "WARN: zlab_robots setup not found: ${ZLAB_ROBOTS_WS}/devel/setup.bash" >&2
 fi
@@ -54,7 +63,7 @@ if [[ ! -f "${WS_ROOT}/devel/setup.bash" ]]; then
   echo "Run: cd ${WS_ROOT} && catkin build" >&2
   exit 2
 fi
-source "${WS_ROOT}/devel/setup.bash"
+source_setup "${WS_ROOT}/devel/setup.bash"
 
 # Make the intended source tree win even if the user's shell sourced another
 # workspace earlier.

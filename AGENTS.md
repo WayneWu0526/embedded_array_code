@@ -14,7 +14,7 @@ streams, with optional FY8300 signal-generator control and robot/TF context.
 | --- | --- |
 | `sensor_data_collection` | Main MagGrad collection launch/nodes, plus legacy TDM collection under `config/legacy` and `launch/legacy` |
 | `serial_processor` | STM32 serial bridges: MagGrad stream, legacy TDM stream, manual-record tools |
-| `sensor_array_config` | Sensor-array, IMU, and profile configs for QMC6309/AK09973D/TMAG3001 arrays |
+| `sensor_array_config` | Board-level hardware configs for QMC6309/AK09973D/TMAG3001 magnetic sensor + IMU boards |
 | `calibration` | Calibration utilities and center-field estimator tools |
 | `triple_arm_task` | Triple-arm scan/exploration experiments |
 | `triple_arm_visual_servo` | MoveIt and visual-servo trajectory experiments |
@@ -47,9 +47,7 @@ Current MagGrad collection:
 
 ```bash
 roslaunch sensor_data_collection maggrad_continuous_collection.launch \
-  profile:=maggrad_dual_v1 \
-  array_config:=qmc6309_12ch_v1 \
-  imu_config:=icm42670 \
+  hardware_config:=tmag3001 \
   output_dir:=$(pwd)/data
 ```
 
@@ -100,8 +98,8 @@ outside the repository.
 
 - For quick Python checks, use `/Users/lawkaho/.venvs/codex/bin/python` unless a
   project-local virtual environment is clearly required.
-- `sensor_array_config` uses a standard Python src-layout. The Python package is
-  under `src/sensor_array_config/src/sensor_array_config`.
+- `sensor_array_config` uses a catkin-friendly Python package layout under
+  `src/sensor_array_config/sensor_array_config`.
 - Keep `src/CMakeLists.txt` as the catkin top-level symlink. It can appear broken
   on machines without `/opt/ros/noetic`, but is valid in the ROS Noetic runtime.
 - Prefer fixing actual structure, paths, build metadata, and runtime output

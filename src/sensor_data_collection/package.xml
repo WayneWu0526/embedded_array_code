@@ -16,6 +16,7 @@
   <depend>tf</depend>
   <depend>tf2_ros</depend>
   <depend>serial_processor</depend>
+  <depend>sensor_array_config</depend>
   <depend>signal_generator</depend>
   <depend>message_generation</depend>
 

@@ -8,7 +8,7 @@ For each CSV file:
   - Compute b_ref via CenterFieldEstimator (all sensors in the selected array contribute)
   - b_ref_norm[n] = b_ref[n] * (mean |b_ref| / |b_ref[n]|)  [per-CSV normalization]
   - Fit D_i @ b_raw + e_i = b_ref_norm  per sensor
-  - Output: affine_model_params.json with D_i, e_i per sensor
+  - Default output: config/<hardware_config>/affine.json with D_i, e_i per sensor
 
 Pipeline: b_raw(orientation-aligned, Gs) -> D_i @ b_raw + e_i -> b_corrected
 """
@@ -27,9 +27,10 @@ from calibration import (
     result_arrays,
     solve_per_sensor,
     stack_record_sets,
+    update_hardware_affine_model,
     write_affine_model_params,
 )
-from sensor_array_config import get_array_config, list_array_configs
+from sensor_array_config import get_hardware_config, list_hardware_configs
 
 
 def build_arg_parser():
@@ -37,9 +38,9 @@ def build_arg_parser():
         description="Fit per-sensor affine calibration from manual_record_*.csv files.",
     )
     parser.add_argument(
-        "--array-config",
+        "--hardware-config",
         default=None,
-        help="Array config name under sensor_array_config/config/arrays. If omitted, prompt interactively.",
+        help="Hardware config name under sensor_array_config/config. If omitted, prompt interactively.",
     )
     parser.add_argument(
         "--data-dir",
@@ -51,54 +52,53 @@ def build_arg_parser():
         "--output",
         type=Path,
         default=None,
-        help="Output affine_model_params.json path. Defaults to the selected array config bundle.",
+        help="Optional standalone affine_model_params.json path. Defaults to updating config/<name>/affine.json.",
     )
     return parser
 
 
-def select_array_config(array_config_arg):
-    if array_config_arg:
-        return array_config_arg
+def select_hardware_config(hardware_config_arg):
+    if hardware_config_arg:
+        return hardware_config_arg
 
-    array_configs = list_array_configs()
-    if not array_configs:
-        raise RuntimeError("No array configs found under sensor_array_config/config/arrays")
+    hardware_configs = list_hardware_configs()
+    if not hardware_configs:
+        raise RuntimeError("No hardware configs found under sensor_array_config/config")
 
-    print("\nSelect array config to calibrate:")
-    for idx, name in enumerate(array_configs, start=1):
+    print("\nSelect hardware config to calibrate:")
+    for idx, name in enumerate(hardware_configs, start=1):
         print(f"  {idx}. {name}")
 
     while True:
-        choice = input(f"Array config [1-{len(array_configs)}]: ").strip()
+        choice = input(f"Hardware config [1-{len(hardware_configs)}]: ").strip()
         try:
             idx = int(choice)
         except ValueError:
             print("Please enter a number.")
             continue
-        if 1 <= idx <= len(array_configs):
-            return array_configs[idx - 1]
-        print(f"Please enter a number between 1 and {len(array_configs)}.")
+        if 1 <= idx <= len(hardware_configs):
+            return hardware_configs[idx - 1]
+        print(f"Please enter a number between 1 and {len(hardware_configs)}.")
 
 
 def main():
     args = build_arg_parser().parse_args()
     base_dir = args.data_dir
-    array_config_name = select_array_config(args.array_config)
-    array_config = get_array_config(array_config_name)
-    n_sensors = int(array_config.manifest.n_sensors)
-    est = CenterFieldEstimator(sensor_config=array_config)
+    hardware_config_name = select_hardware_config(args.hardware_config)
+    hardware_config = get_hardware_config(hardware_config_name)
+    n_sensors = int(hardware_config.magnetometer.n_sensors)
+    est = CenterFieldEstimator(sensor_config=hardware_config)
     default_output = (
         Path(__file__).resolve().parents[2]
         / "sensor_array_config"
         / "config"
-        / "arrays"
-        / array_config_name
-        / "affine_model_params.json"
+        / hardware_config_name
+        / "affine.json"
     )
     output_path = args.output if args.output is not None else default_output
 
     # ── Collect data per CSV (each CSV normalized independently) ───────────────
-    records = load_manual_record_sets(base_dir, est, array_config_name)
+    records = load_manual_record_sets(base_dir, est, hardware_config_name)
     for csv_name, record in records.items():
         print(f"  {csv_name}: N={record.n_rows}, mean_mag={record.mean_mag:.4f}")
 
@@ -175,11 +175,15 @@ def main():
     print(f"  post (norm fair, vs orig b_ref): {df['post_norm_fair'].mean():.6f}")
     print(f"  post (norm train, vs norm b_ref): {df['post_norm_train'].mean():.6f}")
 
-    # Save affine calibration JSON
+    # Save affine calibration
     cal_out = output_path.expanduser()
     cal_out.parent.mkdir(parents=True, exist_ok=True)
-    write_affine_model_params(cal_out, results_norm)
-    print(f"Calibration JSON saved to {cal_out}")
+    if args.output is None:
+        update_hardware_affine_model(cal_out, results_norm)
+        print(f"Hardware config updated at {cal_out}")
+    else:
+        write_affine_model_params(cal_out, results_norm)
+        print(f"Calibration JSON saved to {cal_out}")
 
 
 if __name__ == '__main__':

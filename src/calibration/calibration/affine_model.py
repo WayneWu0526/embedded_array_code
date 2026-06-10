@@ -79,7 +79,7 @@ def delta_o_pre(b_raw_rs, estimator):
     return delta_o
 
 
-def load_manual_record_sets(data_dir: Path, estimator, array_config_name: str) -> Dict[str, ManualRecordSet]:
+def load_manual_record_sets(data_dir: Path, estimator, hardware_config_name: str) -> Dict[str, ManualRecordSet]:
     csv_files = sorted(data_dir.glob("manual_record_*.csv"))
     if not csv_files:
         raise FileNotFoundError(f"No manual_record_*.csv files found in {data_dir}")
@@ -93,7 +93,7 @@ def load_manual_record_sets(data_dir: Path, estimator, array_config_name: str) -
         if b_raw.shape[1] != expected_cols:
             raise ValueError(
                 f"{csv_path} has {b_raw.shape[1]} columns, expected {expected_cols} "
-                f"for array_config={array_config_name}"
+                f"for hardware_config={hardware_config_name}"
             )
         b_raw_rs = b_raw.reshape(-1, n_sensors, 3)
         b_ref, b_corr = estimator.estimate_batch(b_raw)
@@ -141,5 +141,51 @@ def affine_results_payload(results):
 
 def write_affine_model_params(path: Path, results):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as f:
-        json.dump(affine_results_payload(results), f, indent=2)
+    path.write_text(_dump_compact_json(affine_results_payload(results)))
+
+
+def update_hardware_affine_model(path: Path, results):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_dump_compact_json(affine_results_payload(results)))
+
+
+def _dump_compact_json(value, indent=0):
+    pad = " " * indent
+    child_pad = " " * (indent + 2)
+    if _is_scalar(value):
+        return json.dumps(value)
+    if _is_scalar_list(value):
+        return json.dumps(value, separators=(", ", ": "))
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        lines = ["["]
+        for idx, item in enumerate(value):
+            suffix = "," if idx < len(value) - 1 else ""
+            rendered = _dump_compact_json(item, indent + 2)
+            lines.append(f"{child_pad}{rendered}{suffix}")
+        lines.append(f"{pad}]")
+        return "\n".join(lines)
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        lines = ["{"]
+        items = list(value.items())
+        for idx, (key, item) in enumerate(items):
+            suffix = "," if idx < len(items) - 1 else ""
+            rendered = _dump_compact_json(item, indent + 2)
+            if "\n" in rendered:
+                lines.append(f"{child_pad}{json.dumps(str(key))}: {rendered}{suffix}")
+            else:
+                lines.append(f"{child_pad}{json.dumps(str(key))}: {rendered}{suffix}")
+        lines.append(f"{pad}}}")
+        return "\n".join(lines) + ("\n" if indent == 0 else "")
+    raise TypeError(f"Unsupported JSON value: {type(value).__name__}")
+
+
+def _is_scalar(value):
+    return value is None or isinstance(value, (str, int, float, bool))
+
+
+def _is_scalar_list(value):
+    return isinstance(value, list) and all(_is_scalar(item) for item in value)
